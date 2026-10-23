@@ -451,3 +451,129 @@ func TestLimiterMiddlewarePrefix48PreservesPerKeyLimits(t *testing.T) {
 		})
 	}
 }
+
+func TestLimiterMiddlewareEmpty64DoesNotTouchPrefix48(t *testing.T) {
+	t.Setenv("HAULER_UI_TRUST_PROXY", "")
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	l.refillRate = 0
+	handler := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := func(want int) {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/login", nil)
+		r.RemoteAddr = "[2001:db8:42:1::1]:5555"
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != want {
+			t.Fatalf("status = %d, want %d", w.Code, want)
+		}
+	}
+	for i := 0; i < 5; i++ {
+		request(http.StatusNoContent)
+	}
+	l.prefix48.mu.Lock()
+	b := l.prefix48.buckets["2001:db8:42::/48"]
+	b.lastSeen = time.Now().Add(-time.Second)
+	before := *b
+	l.prefix48.mu.Unlock()
+	for i := 0; i < 5; i++ {
+		request(http.StatusTooManyRequests)
+	}
+	l.prefix48.mu.Lock()
+	after := *b
+	l.prefix48.mu.Unlock()
+	if after != before {
+		t.Fatalf("/48 bucket changed: before=%+v, after=%+v", before, after)
+	}
+}
+
+func TestLimiterMiddlewareEmpty64RetryAfterFrom64(t *testing.T) {
+	t.Setenv("HAULER_UI_TRUST_PROXY", "")
+	t.Setenv("HAULER_UI_LOGIN_RATE", "")
+	l := newLoginLimiter()
+	now := time.Now()
+	l.buckets["2001:db8:42:1::/64"] = &tokenBucket{lastSeen: now}
+	l.prefix48.buckets["2001:db8:42::/48"] = &tokenBucket{lastSeen: now}
+	handler := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		t.Fatal("denied request reached next handler")
+	}))
+	r := httptest.NewRequest(http.MethodPost, "/login", nil)
+	r.RemoteAddr = "[2001:db8:42:1::1]:5555"
+	w := httptest.NewRecorder()
+	handler.ServeHTTP(w, r)
+	if w.Code != http.StatusTooManyRequests {
+		t.Fatalf("status = %d, want 429", w.Code)
+	}
+	// The /64 wait is ~12s at 5/min; the /48 wait would be ~1s.
+	secs, err := strconv.Atoi(w.Header().Get("Retry-After"))
+	if err != nil || secs < 5 || secs > 12 {
+		t.Fatalf("Retry-After = %q, want the ~12s /64 wait", w.Header().Get("Retry-After"))
+	}
+}
+
+func TestLimiterPeekDoesNotMutate(t *testing.T) {
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	if ok, wait := l.peek("missing"); !ok || wait != 0 {
+		t.Fatalf("missing key: ok=%v, wait=%v", ok, wait)
+	}
+	if len(l.buckets) != 0 || l.overflow != nil || !l.lastEvict.IsZero() {
+		t.Fatal("peek on missing key changed limiter state")
+	}
+
+	for _, tt := range []struct {
+		name   string
+		tokens float64
+		age    time.Duration
+		ok     bool
+	}{
+		{"empty", 0, 0, false},
+		{"minimum wait", 0.99, 0, false},
+		{"refilled", 0, 13 * time.Second, true},
+		{"stale", 0, l.ttl + time.Second, true},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			before := tokenBucket{tokens: tt.tokens, lastSeen: time.Now().Add(-tt.age)}
+			b := before
+			l.buckets["existing"] = &b
+			ok, wait := l.peek("existing")
+			if ok != tt.ok || (ok && wait != 0) || (!ok && wait < time.Second) {
+				t.Fatalf("peek: ok=%v, wait=%v, want ok=%v", ok, wait, tt.ok)
+			}
+			if tt.name == "minimum wait" && wait != time.Second {
+				t.Fatalf("wait = %v, want 1s", wait)
+			}
+			if b != before || l.buckets["existing"] != &b || len(l.buckets) != 1 || !l.lastEvict.IsZero() {
+				t.Fatal("peek changed existing bucket or evicted it")
+			}
+		})
+	}
+
+	now := time.Now()
+	for i := 1; i < maxLoginBuckets; i++ {
+		l.buckets[strconv.Itoa(i)] = &tokenBucket{tokens: 5, lastSeen: now}
+	}
+	if ok, wait := l.peek("missing"); !ok || wait != 0 || l.overflow != nil {
+		t.Fatalf("nil overflow: ok=%v, wait=%v, overflow=%v", ok, wait, l.overflow)
+	}
+	for _, tokens := range []float64{0, 2} {
+		before := tokenBucket{tokens: tokens, lastSeen: time.Now()}
+		b := before
+		l.overflow = &b
+		ok, wait := l.peek("missing")
+		if ok != (tokens >= 1) || (ok && wait != 0) || (!ok && wait < 11*time.Second) {
+			t.Fatalf("overflow with %v tokens: ok=%v, wait=%v", tokens, ok, wait)
+		}
+		if b != before || l.overflow != &b {
+			t.Fatal("peek changed overflow bucket")
+		}
+		if ok, _ := l.peek("1"); !ok {
+			t.Fatal("existing key should use its own bucket at map capacity")
+		}
+	}
+	if len(l.buckets) != maxLoginBuckets || l.buckets["missing"] != nil || !l.lastEvict.IsZero() {
+		t.Fatal("peek at map capacity inserted or evicted a bucket")
+	}
+}
