@@ -82,14 +82,16 @@ func (l *loginLimiter) allow(key string) (bool, time.Duration) {
 	return ok, retryAfter
 }
 
-// peek reports availability after refill without changing limiter state.
+// peek reports whether the key's existing bucket has a token after refill,
+// without changing limiter state. It skips charge()'s expired-entry clearing,
+// so for unknown keys (including when the map is full) it defers to charge().
 func (l *loginLimiter) peek(key string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
 	b := l.buckets[key]
-	if b == nil && len(l.buckets) >= maxLoginBuckets {
-		b = l.overflow
+	if b == nil {
+		return true, 0
 	}
 	tokens := l.refilledTokens(b, time.Now())
 	return tokens >= 1, l.tokenWait(tokens)

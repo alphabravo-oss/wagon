@@ -555,18 +555,15 @@ func TestLimiterPeekDoesNotMutate(t *testing.T) {
 	for i := 1; i < maxLoginBuckets; i++ {
 		l.buckets[strconv.Itoa(i)] = &tokenBucket{tokens: 5, lastSeen: now}
 	}
-	if ok, wait := l.peek("missing"); !ok || wait != 0 || l.overflow != nil {
-		t.Fatalf("nil overflow: ok=%v, wait=%v, overflow=%v", ok, wait, l.overflow)
-	}
+	// Unknown keys at map capacity defer to charge(), even with an empty overflow.
 	for _, tokens := range []float64{0, 2} {
 		before := tokenBucket{tokens: tokens, lastSeen: time.Now()}
-		b := before
-		l.overflow = &b
-		ok, wait := l.peek("missing")
-		if ok != (tokens >= 1) || (ok && wait != 0) || (!ok && wait < 11*time.Second) {
-			t.Fatalf("overflow with %v tokens: ok=%v, wait=%v", tokens, ok, wait)
+		ov := before
+		l.overflow = &ov
+		if ok, wait := l.peek("missing"); !ok || wait != 0 {
+			t.Fatalf("overflow with %v tokens: ok=%v, wait=%v, want defer to charge", tokens, ok, wait)
 		}
-		if b != before || l.overflow != &b {
+		if ov != before || l.overflow != &ov {
 			t.Fatal("peek changed overflow bucket")
 		}
 		if ok, _ := l.peek("1"); !ok {
@@ -575,5 +572,30 @@ func TestLimiterPeekDoesNotMutate(t *testing.T) {
 	}
 	if len(l.buckets) != maxLoginBuckets || l.buckets["missing"] != nil || !l.lastEvict.IsZero() {
 		t.Fatal("peek at map capacity inserted or evicted a bucket")
+	}
+}
+
+func TestLimiterMiddlewareFullMapOfExpiredEntriesAdmitsNewClients(t *testing.T) {
+	t.Setenv("HAULER_UI_TRUST_PROXY", "")
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	now := time.Now()
+	expired := now.Add(-l.ttl - time.Minute)
+	for i := 0; i < maxLoginBuckets; i++ {
+		l.buckets["stale-"+strconv.Itoa(i)] = &tokenBucket{tokens: 0, lastSeen: expired}
+	}
+	l.lastEvict = now
+	l.overflow = &tokenBucket{tokens: 0, lastSeen: now}
+	handler := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	for _, addr := range []string{"192.0.2.10:5555", "[2001:db8:77:1::1]:5555"} {
+		r := httptest.NewRequest(http.MethodPost, "/login", nil)
+		r.RemoteAddr = addr
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code != http.StatusNoContent {
+			t.Fatalf("%s: status = %d, want 204 (expired entries must be cleared, not counted)", addr, w.Code)
+		}
 	}
 }
