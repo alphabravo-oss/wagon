@@ -234,6 +234,7 @@ func (r *Runner) streamOutput(ctx context.Context, jobID int64, reader io.Reader
 			}
 			redactedLine := redactSensitive(string(line))
 			if discarded := lineBytes - int64(len(line)); discarded > 0 {
+				redactedLine = redactTruncatedTail(redactedLine)
 				redactedLine += fmt.Sprintf(" [truncated %d bytes]", discarded)
 			}
 			if logErr := r.appendLog(ctx, jobID, streamName, redactedLine); logErr != nil {
@@ -250,6 +251,19 @@ func (r *Runner) streamOutput(ctx context.Context, jobID int64, reader io.Reader
 		line = line[:0]
 		lineBytes = 0
 	}
+}
+
+var (
+	truncatedURLPassword = regexp.MustCompile(`://[^:/]+:[^@]*$`)
+	truncatedURLUsername = regexp.MustCompile(`://[^:/@\s]+$`)
+	truncatedDockerAuth  = regexp.MustCompile(`("auth":\s*")[^"]*$`)
+)
+
+// redactTruncatedTail covers credentials whose terminator was discarded by truncation.
+func redactTruncatedTail(line string) string {
+	line = truncatedURLPassword.ReplaceAllString(line, "://[REDACTED]:")
+	line = truncatedURLUsername.ReplaceAllString(line, "://[REDACTED]")
+	return truncatedDockerAuth.ReplaceAllString(line, "${1}[REDACTED]")
 }
 
 // redactSensitive redacts potential sensitive information from log lines
