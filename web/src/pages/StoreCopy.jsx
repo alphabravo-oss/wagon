@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { useNavigate, NavLink } from 'react-router-dom'
-import { useJobs } from '../contexts/JobsContext.jsx'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useJobs } from '../contexts/useJobs.js'
+import { useHauls } from '../contexts/useHauls.js'
 import { Clipboard } from 'lucide-react'
 
 function StoreCopy() {

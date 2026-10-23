@@ -3,7 +3,7 @@ import { render, act } from '@testing-library/react'
 
 // The page reads the active haul from HaulContext; drive it directly.
 let mockActiveHaul = { id: 1, name: 'first' }
-vi.mock('../contexts/HaulContext.jsx', () => ({
+vi.mock('../contexts/useHauls.js', () => ({
   useHauls: () => ({ activeHaul: mockActiveHaul }),
 }))
 

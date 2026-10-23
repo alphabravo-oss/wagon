@@ -1,19 +1,10 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
+import { useState, useEffect, useCallback } from 'react'
+import { HaulContext } from './useHauls.js'
 
 // HaulContext tracks the set of hauls and which one is "active" — the haul that
 // store operations (add, sync, save, serve, ...) target by default. The active
 // haul id is persisted to localStorage so it survives reloads.
-const HaulContext = createContext()
-
 const ACTIVE_HAUL_KEY = 'wagon.activeHaulId'
-
-export function useHauls() {
-  const ctx = useContext(HaulContext)
-  if (!ctx) {
-    throw new Error('useHauls must be used within HaulProvider')
-  }
-  return ctx
-}
 
 export function HaulProvider({ children }) {
   const [hauls, setHauls] = useState([])

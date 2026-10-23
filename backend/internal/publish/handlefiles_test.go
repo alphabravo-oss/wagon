@@ -19,7 +19,11 @@ func TestHandleFilesRequiresPublished(t *testing.T) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
 	cfg := &config.Config{DataDir: t.TempDir()}
 	haulSvc := hauls.NewService(db.DB, cfg)
 

@@ -4,7 +4,7 @@ import {
   Image, BarChart3, FileText, RefreshCw, Save, Download, Upload,
   Clipboard, Globe, Trash2
 } from 'lucide-react'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
 
 function Store() {
   const { activeHaul } = useHauls()

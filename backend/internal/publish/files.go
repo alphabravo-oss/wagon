@@ -169,7 +169,7 @@ func serveFile(w http.ResponseWriter, r *http.Request, storeDir, name string) {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
 	}
-	defer f.Close()
+	defer func() { _ = f.Close() }() // read-only; nothing to flush
 	info, err := f.Stat()
 	if err != nil {
 		http.Error(w, "stat failed", http.StatusInternalServerError)
