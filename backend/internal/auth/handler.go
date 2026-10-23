@@ -143,16 +143,13 @@ func (h *Handler) Validate(w http.ResponseWriter, r *http.Request) {
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	limiter := newLoginLimiter()
 
-	// Rate-limit only the actual login POST. CORS preflight (OPTIONS) is handled
-	// before the limiter so it neither consumes a token nor loses its CORS
-	// headers to a 429.
+	// Rate-limit only the actual login POST. The UI is same-origin, so no CORS
+	// headers are sent: a cross-origin preflight gets 405 without consuming a
+	// limiter token.
 	limitedLogin := limiter.Middleware(http.HandlerFunc(h.Login))
 	mux.HandleFunc("/api/auth/login", func(w http.ResponseWriter, r *http.Request) {
-		if r.Method == http.MethodOptions {
-			w.Header().Set("Access-Control-Allow-Origin", "*")
-			w.Header().Set("Access-Control-Allow-Methods", "POST, OPTIONS")
-			w.Header().Set("Access-Control-Allow-Headers", "Content-Type")
-			w.WriteHeader(http.StatusOK)
+		if r.Method != http.MethodPost {
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
 			return
 		}
 		limitedLogin.ServeHTTP(w, r)

@@ -5,6 +5,7 @@ import (
 	"database/sql"
 	"encoding/json"
 	"log"
+	"log/slog"
 	"net/http"
 	"os"
 	"os/exec"
@@ -81,7 +82,7 @@ func startJobProcessor(runner *jobrunner.Runner, pm *publish.Manager, stopCh <-c
 						break
 					}
 					if job.Status == jobrunner.StatusQueued {
-						log.Printf("Starting queued job #%d: %s %v", job.ID, job.Command, job.Args)
+						log.Printf("Starting queued job #%d: %s %v", job.ID, job.Command, jobrunner.RedactArgs(job.Args))
 						if err := runner.Start(ctx, job.ID); err != nil {
 							log.Printf("Error starting job #%d: %v", job.ID, err)
 						} else {
@@ -117,6 +118,13 @@ func main() {
 	obs.Setup()
 
 	cfg := config.Load()
+	if err := cfg.Validate(); err != nil {
+		log.Fatalf("Configuration error: %v", err)
+	}
+	if cfg.InsecureNoAuth && cfg.UIPassword == "" {
+		slog.Warn("INSECURE: HAULER_UI_INSECURE_NO_AUTH=true and no HAULER_UI_PASSWORD: authentication is DISABLED. " +
+			"Anyone who can reach this port has full control of Wagon. Do not expose it beyond localhost.")
+	}
 
 	// Initialize SQLite database
 	db, err := sqlite.Open(cfg.DatabasePath)
@@ -212,46 +220,8 @@ func main() {
 	settingsHandler.RegisterRoutes(mux)
 
 	// Job API endpoints
-	mux.HandleFunc("/api/jobs", func(w http.ResponseWriter, r *http.Request) {
-		switch r.Method {
-		case http.MethodPost:
-			jobHandler.CreateJob(w, r)
-		case http.MethodDelete:
-			jobHandler.DeleteAllJobs(w, r)
-		default:
-			jobHandler.ListJobs(w, r)
-		}
-	})
-	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {
-		// Check if this is a logs, stream, or cleanup request
-		if len(r.URL.Path) > len("/api/jobs/") {
-			suffix := r.URL.Path[len("/api/jobs/"):]
-			if len(suffix) > 0 {
-				// Look for /logs, /stream, or /cleanup suffix
-				for i, c := range suffix {
-					if c == '/' {
-						sub := suffix[i:]
-						if sub == "/logs" {
-							jobHandler.GetJobLogs(w, r)
-							return
-						}
-						if sub == "/stream" {
-							jobHandler.StreamJobLogs(w, r)
-							return
-						}
-						if sub == "/cleanup" && r.Method == http.MethodPost {
-							jobHandler.CleanupStaleJob(w, r)
-							return
-						}
-					}
-				}
-				// No special suffix, treat as get job
-				jobHandler.GetJob(w, r)
-				return
-			}
-		}
-		http.NotFound(w, r)
-	})
+	registerJobRoutes(mux, jobHandler)
+
 	mux.HandleFunc("/", func(w http.ResponseWriter, r *http.Request) {
 		if r.URL.Path != "/" {
 			http.NotFound(w, r)
@@ -270,9 +240,10 @@ func main() {
 		http.ServeFile(w, r, "./web/favicon.svg")
 	})
 
-	// Wrap mux with auth middleware, then instrument the whole chain so metrics
-	// and access logs capture every request (including auth rejections).
-	handler := obs.Instrument(authManager.Middleware(mux))
+	// Wrap mux with the cross-origin/content-type guard and auth middleware,
+	// then instrument the whole chain so metrics and access logs capture every
+	// request (including rejections).
+	handler := obs.Instrument(secureHandler(mux, authManager, cfg))
 
 	port := getEnv("PORT", "8080")
 	server := &http.Server{
@@ -310,6 +281,58 @@ func main() {
 		log.Printf("graceful shutdown error: %v", err)
 	}
 	log.Println("Shutdown complete")
+}
+
+// registerJobRoutes registers the job API. Jobs are created only by the typed
+// endpoints (store, registry, ...); there is deliberately no generic
+// "run this command" route.
+func registerJobRoutes(mux *http.ServeMux, jobHandler *jobrunner.Handler) {
+	mux.HandleFunc("/api/jobs", func(w http.ResponseWriter, r *http.Request) {
+		switch r.Method {
+		case http.MethodGet:
+			jobHandler.ListJobs(w, r)
+		case http.MethodDelete:
+			jobHandler.DeleteAllJobs(w, r)
+		default:
+			w.Header().Set("Allow", "GET, DELETE")
+			http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
+		}
+	})
+	mux.HandleFunc("/api/jobs/", func(w http.ResponseWriter, r *http.Request) {
+		// Check if this is a logs, stream, or cleanup request
+		if len(r.URL.Path) > len("/api/jobs/") {
+			suffix := r.URL.Path[len("/api/jobs/"):]
+			if len(suffix) > 0 {
+				// Look for /logs, /stream, or /cleanup suffix
+				for i, c := range suffix {
+					if c == '/' {
+						sub := suffix[i:]
+						if sub == "/logs" {
+							jobHandler.GetJobLogs(w, r)
+							return
+						}
+						if sub == "/stream" {
+							jobHandler.StreamJobLogs(w, r)
+							return
+						}
+						if sub == "/cleanup" && r.Method == http.MethodPost {
+							jobHandler.CleanupStaleJob(w, r)
+							return
+						}
+					}
+				}
+				// No special suffix, treat as get job
+				jobHandler.GetJob(w, r)
+				return
+			}
+		}
+		http.NotFound(w, r)
+	})
+}
+
+// secureHandler applies the cross-origin/content-type guard, then auth.
+func secureHandler(mux http.Handler, am *auth.Manager, cfg *config.Config) http.Handler {
+	return auth.RequestGuard(am.Middleware(mux), cfg.TrustedOrigins)
 }
 
 func healthzHandler(w http.ResponseWriter, r *http.Request) {

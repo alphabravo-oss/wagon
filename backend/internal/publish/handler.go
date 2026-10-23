@@ -2,6 +2,8 @@ package publish
 
 import (
 	"encoding/json"
+	"errors"
+	"io"
 	"net/http"
 	"os"
 	"strconv"
@@ -109,8 +111,12 @@ func (h *Handler) handleByID(w http.ResponseWriter, r *http.Request) {
 
 	switch r.Method {
 	case http.MethodPost:
+		// The body is optional (hostname defaults), but a malformed one is an error.
 		var req publishRequest
-		_ = json.NewDecoder(r.Body).Decode(&req)
+		if err := json.NewDecoder(r.Body).Decode(&req); err != nil && !errors.Is(err, io.EOF) {
+			http.Error(w, "invalid request body", http.StatusBadRequest)
+			return
+		}
 		p, err := h.mgr.Publish(r.Context(), id, req.Hostname)
 		if err != nil {
 			http.Error(w, "Failed to publish: "+err.Error(), http.StatusInternalServerError)
@@ -156,6 +162,12 @@ func (h *Handler) handleFiles(w http.ResponseWriter, r *http.Request) {
 
 	haul, err := h.hauls.GetBySlug(r.Context(), slug)
 	if err != nil {
+		http.Error(w, "haul not found", http.StatusNotFound)
+		return
+	}
+	// Only serve files for a haul that is currently published; an unpublished
+	// haul's content is not reachable even when publish auth is unset.
+	if !h.mgr.IsPublished(haul.ID) {
 		http.Error(w, "haul not found", http.StatusNotFound)
 		return
 	}
