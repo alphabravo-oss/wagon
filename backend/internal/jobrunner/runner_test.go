@@ -449,6 +449,23 @@ func TestStreamOutput(t *testing.T) {
 			want:  []string{"short", "", capped + fmt.Sprintf(" [truncated %d bytes]", longLineBytes-maxLogLineBytes), "windows", "", "PASSWORD=[REDACTED]", "final"},
 		},
 		{name: "empty"},
+		{
+			name:  "truncated URL password",
+			input: capped[:maxLogLineBytes-len("https://user:secret")] + "https://user:secret@registry.example.com/x extra\n",
+			want:  []string{capped[:maxLogLineBytes-len("https://user:secret")] + "https://[REDACTED]:" + fmt.Sprintf(" [truncated %d bytes]", len("@registry.example.com/x extra"))},
+		},
+		{
+			name:  "truncated URL username",
+			input: capped[:maxLogLineBytes-len("https://user")] + "https://user:secret@registry.example.com/x\r\n",
+			want:  []string{capped[:maxLogLineBytes-len("https://user")] + "https://[REDACTED]" + fmt.Sprintf(" [truncated %d bytes]", len(":secret@registry.example.com/x"))},
+		},
+		{
+			name:  "truncated docker auth",
+			input: capped[:maxLogLineBytes-len(`"auth": "abc`)] + `"auth": "abcdef"}`,
+			want:  []string{capped[:maxLogLineBytes-len(`"auth": "abc`)] + `"auth": "[REDACTED]` + fmt.Sprintf(" [truncated %d bytes]", len(`def"}`))},
+		},
+		{name: "full URL with port", input: "https://host:8080/path\n", want: []string{"https://host:8080/path"}},
+		{name: "URL at cap", input: capped[:maxLogLineBytes-len("https://host:8080/path")] + "https://host:8080/path\r\n", want: []string{capped[:maxLogLineBytes-len("https://host:8080/path")] + "https://host:8080/path"}},
 		{name: "empty line", input: "\n", want: []string{""}},
 		{name: "final CR", input: "\r", want: []string{""}},
 		{name: "at cap CRLF", input: capped + "\r\n", want: []string{capped}},
@@ -482,6 +499,32 @@ func TestStreamOutput(t *testing.T) {
 				if logs[i].Stream != "stdout" || logs[i].Content != want {
 					t.Errorf("line %d mismatch: got stream %q and %d bytes, want stdout and %d bytes", i, logs[i].Stream, len(logs[i].Content), len(want))
 				}
+			}
+		})
+	}
+}
+
+func TestRedactTruncatedTail(t *testing.T) {
+	for _, tt := range []struct {
+		name  string
+		input string
+		want  string
+	}{
+		{"password", "prefix https://user:secret", "prefix https://[REDACTED]:"},
+		{"empty password", "https://user:", "https://[REDACTED]:"},
+		{"username", "https://user", "https://[REDACTED]"},
+		{"auth", `{"auth": "abc`, `{"auth": "[REDACTED]`},
+		{"empty auth", `"auth": "`, `"auth": "[REDACTED]`},
+		{"auth whitespace", "\"auth\":\t\"abc", "\"auth\":\t\"[REDACTED]"},
+		{"plain tail", "ordinary log text", "ordinary log text"},
+		{"terminated URL", "https://[REDACTED]:@registry.example.com/x", "https://[REDACTED]:@registry.example.com/x"},
+		{"terminated auth", `"auth": "[REDACTED]"`, `"auth": "[REDACTED]"`},
+		{"URL before tail", "https://host/path more text", "https://host/path more text"},
+		{"empty", "", ""},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := redactTruncatedTail(tt.input); got != tt.want {
+				t.Errorf("got %q, want %q", got, tt.want)
 			}
 		})
 	}
