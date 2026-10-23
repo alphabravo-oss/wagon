@@ -2,15 +2,23 @@ services:
   wagon:
     # image: ghcr.io/alphabravo-oss/wagon:latest   # Uncomment to use the published image instead of building locally
     build: ..
+    # Ports are published on 127.0.0.1 (this host only) by default. To expose
+    # Wagon to other machines, set HAULER_UI_BIND_ADDR deliberately (e.g. to a
+    # LAN interface IP, or 0.0.0.0 for all interfaces) and put TLS in front.
     ports:
-      - "${PORT:-8080}:8080"   # Main UI
-      - "5000:5000"            # Registry serve (published registry)
-      - "5001:5001"            # Optional: manual fileserver serve (user-chosen port)
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"   # Main UI
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5000:5000"            # Registry serve (published registry)
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Optional: manual fileserver serve (user-chosen port)
     volumes:
       - ./data:/data
     environment:
       - PORT=${PORT:-8080}
+      # REQUIRED: Wagon refuses to start without a UI password.
       - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}
+      # Extra browser origins allowed to make changes (reverse proxy that rewrites Host)
+      - HAULER_UI_TRUSTED_ORIGINS=${HAULER_UI_TRUSTED_ORIGINS:-}
+      # DANGER: "true" runs with NO authentication. Never set this on a reachable host.
+      - HAULER_UI_INSECURE_NO_AUTH=${HAULER_UI_INSECURE_NO_AUTH:-false}
       - HAULER_LOG_LEVEL=${HAULER_LOG_LEVEL:-info}
       - HAULER_IGNORE_ERRORS=${HAULER_IGNORE_ERRORS:-false}
       - HAULER_RETRIES=${HAULER_RETRIES:-0}

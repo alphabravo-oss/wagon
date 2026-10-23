@@ -3,6 +3,7 @@ package publish
 import (
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
@@ -156,5 +157,15 @@ func TestFreePort(t *testing.T) {
 	}
 	if port <= 0 {
 		t.Fatalf("expected a positive port, got %d", port)
+	}
+}
+
+func TestPublishRejectsMalformedBody(t *testing.T) {
+	h := &Handler{} // the body is validated before the manager is used
+	r := httptest.NewRequest(http.MethodPost, "/api/publish/1", strings.NewReader("hostname=x"))
+	w := httptest.NewRecorder()
+	h.handleByID(w, r)
+	if w.Code != http.StatusBadRequest {
+		t.Fatalf("malformed publish body: status = %d, want 400", w.Code)
 	}
 }

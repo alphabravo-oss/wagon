@@ -4,6 +4,22 @@ All notable changes to Wagon will be documented in this file.
 
 ## [Unreleased]
 
+### Changed — secure defaults (breaking)
+
+- `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
+  explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
+  no-auth behaviour for throwaway local use and logs a warning.
+- `deploy/docker-compose.yml` publishes ports on `127.0.0.1` by default; set
+  `HAULER_UI_BIND_ADDR` to expose Wagon deliberately.
+- State-changing requests from another browser origin are rejected (403); JSON
+  endpoints require `Content-Type: application/json` (415); the archive upload
+  requires an `X-Requested-With` header. `HAULER_UI_TRUSTED_ORIGINS` allows
+  extra origins behind a Host-rewriting proxy.
+- Removed the generic `POST /api/jobs` endpoint; jobs are created by the typed
+  store/registry endpoints.
+- Job API responses and the job event stream no longer send wildcard CORS
+  headers and mask credential values (env overrides, `--password`).
+
 ### Changed
 
 - Renamed the product from Hauler UI to **Wagon**.

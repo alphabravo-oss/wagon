@@ -1,6 +1,8 @@
 package publish
 
 import (
+	"crypto/sha256"
+	"encoding/hex"
 	"encoding/json"
 	"net/http/httptest"
 	"os"
@@ -19,23 +21,39 @@ func writePublishFixture(t *testing.T, path, content string) {
 	}
 }
 
+// dg returns a canonical sha256 digest derived from a readable label.
+func dg(label string) string {
+	sum := sha256.Sum256([]byte(label))
+	return "sha256:" + hex.EncodeToString(sum[:])
+}
+
+// blobFile returns the blob path for a canonical digest, failing the test otherwise.
+func blobFile(t *testing.T, dir, digest string) string {
+	t.Helper()
+	p, err := blobPath(dir, digest)
+	if err != nil {
+		t.Fatalf("blobPath(%q): %v", digest, err)
+	}
+	return p
+}
+
 func TestPublishedFiles(t *testing.T) {
 	dir := t.TempDir()
-	writePublishFixture(t, filepath.Join(dir, "index.json"), `{"manifests":[{"digest":"sha256:missing"},{"digest":"sha256:invalid"},{"digest":"sha256:manifest"}]}`)
-	writePublishFixture(t, blobPath(dir, "sha256:invalid"), `{`)
-	writePublishFixture(t, blobPath(dir, "sha256:manifest"), `{"layers":[
- {"digest":"sha256:untitled"},
- {"digest":"sha256:content","size":6,"annotations":{"org.opencontainers.image.title":"notes.txt"}},
- {"digest":"sha256:duplicate","size":99,"annotations":{"org.opencontainers.image.title":"notes.txt"}},
- {"digest":"sha256:absent","size":10,"annotations":{"org.opencontainers.image.title":"missing.tgz"}}]}`)
-	writePublishFixture(t, blobPath(dir, "content"), "abcdef")
-	want := []FileEntry{{Name: "notes.txt", Size: 6, Digest: "sha256:content"}, {Name: "missing.tgz", Size: 10, Digest: "sha256:absent"}}
+	writePublishFixture(t, filepath.Join(dir, "index.json"), `{"manifests":[{"digest":"`+dg("missing")+`"},{"digest":"`+dg("invalid")+`"},{"digest":"`+dg("manifest")+`"}]}`)
+	writePublishFixture(t, blobFile(t, dir, dg("invalid")), `{`)
+	writePublishFixture(t, blobFile(t, dir, dg("manifest")), `{"layers":[
+ {"digest":"`+dg("untitled")+`"},
+ {"digest":"`+dg("content")+`","size":6,"annotations":{"org.opencontainers.image.title":"notes.txt"}},
+ {"digest":"`+dg("duplicate")+`","size":99,"annotations":{"org.opencontainers.image.title":"notes.txt"}},
+ {"digest":"`+dg("absent")+`","size":10,"annotations":{"org.opencontainers.image.title":"missing.tgz"}}]}`)
+	writePublishFixture(t, blobFile(t, dir, dg("content")), "abcdef")
+	want := []FileEntry{{Name: "notes.txt", Size: 6, Digest: dg("content")}, {Name: "missing.tgz", Size: 10, Digest: dg("absent")}}
 	got, err := listFiles(dir)
 	if err != nil || !reflect.DeepEqual(got, want) {
 		t.Fatalf("files=%#v err=%v", got, err)
 	}
 	digest, size, ok := findFileLayer(dir, "notes.txt")
-	if !ok || digest != "sha256:content" || size != 6 {
+	if !ok || digest != dg("content") || size != 6 {
 		t.Fatalf("layer=%q %d %v", digest, size, ok)
 	}
 	w := httptest.NewRecorder()

@@ -18,14 +18,14 @@ services:
   wagon:
     build: ..
     ports:
-      - "${PORT:-8080}:8080"   # Main UI
-      - "5000:5000"            # Registry serve
-      - "5001:5001"            # Fileserver serve
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"   # Main UI (this host only by default)
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5000:5000"            # Registry serve
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Fileserver serve
     volumes:
       - ./data:/data
     environment:
       - PORT=${PORT:-8080}
-      - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}
+      - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}   # required
       - HAULER_LOG_LEVEL=${HAULER_LOG_LEVEL:-info}
       - HAULER_IGNORE_ERRORS=${HAULER_IGNORE_ERRORS:-false}
       - HAULER_RETRIES=${HAULER_RETRIES:-3}
@@ -50,9 +50,9 @@ mkdir -p ./data
 # Run the container
 docker run -d \
   --name wagon \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -v $(pwd)/data:/data \
-  -e HAULER_UI_PASSWORD=your-optional-password \
+  -e HAULER_UI_PASSWORD=your-strong-password \
   wagon:latest
 ```
 
@@ -96,7 +96,10 @@ docker build -t wagon:latest .
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP port for the UI |
-| `HAULER_UI_PASSWORD` | (empty) | Optional password for UI access |
+| `HAULER_UI_PASSWORD` | (none, **required**) | Password for UI/API access; Wagon refuses to start without it |
+| `HAULER_UI_BIND_ADDR` | `127.0.0.1` | Compose only: host address ports are published on; change deliberately to expose Wagon |
+| `HAULER_UI_TRUSTED_ORIGINS` | (empty) | Extra origins allowed to make changes (reverse proxy that rewrites `Host`) |
+| `HAULER_UI_INSECURE_NO_AUTH` | `false` | **Danger.** `true` starts with no authentication. Local throwaway testing only |
 | `HAULER_LOG_LEVEL` | `info` | Hauler CLI log level (debug, info, warn, error) |
 | `HAULER_IGNORE_ERRORS` | `false` | Continue operations despite errors |
 | `HAULER_RETRIES` | `3` | Number of retries for failed operations |
@@ -125,7 +128,7 @@ Without this mount, all data (store contents, registry credentials, settings) wi
 ## Accessing the UI
 
 1. Open http://localhost:8080 in your browser
-2. If `HAULER_UI_PASSWORD` is set, enter the password
+2. Enter the `HAULER_UI_PASSWORD` password
 3. The dashboard shows available operations and current job status
 
 ## Common Workflows
@@ -152,12 +155,13 @@ Each wizard links to detailed pages for:
 
 ### UI Authentication
 
-Setting `HAULER_UI_PASSWORD` enables single-user password protection:
+`HAULER_UI_PASSWORD` is required and enables single-user password protection.
+If it is empty, Wagon logs a configuration error and exits:
 
 ```bash
 docker run -d \
   -v ./data:/data \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
   -e HAULER_UI_PASSWORD=mys3cr3t \
   wagon:latest
 ```
@@ -165,6 +169,9 @@ docker run -d \
 - Sessions expire after 24 hours
 - Cookie is httpOnly and SameSite=Strict
 - No multi-user support - single shared password
+- State-changing requests from another browser origin are rejected (403)
+- `HAULER_UI_INSECURE_NO_AUTH=true` disables authentication entirely; it logs a
+  loud warning and must never be used on a reachable host
 
 ### Registry Login
 

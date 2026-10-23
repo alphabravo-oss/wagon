@@ -39,18 +39,23 @@ Wagon is a **single-container web application** that provides full operational p
 ### Docker (Recommended)
 
 ```bash
-# Run with default configuration
+# A UI password is required; Wagon refuses to start without one.
 docker run -d \
   --name wagon \
-  -p 8080:8080 \
+  -p 127.0.0.1:8080:8080 \
+  -e HAULER_UI_PASSWORD='choose-a-strong-password' \
   -v wagon-data:/data \
   ghcr.io/alphabravo-oss/wagon:latest
 
-# Or use Docker Compose
-docker-compose -f deploy/docker-compose.yml up -d
+# Or use Docker Compose (set HAULER_UI_PASSWORD in deploy/.env first)
+cp deploy/.env.example deploy/.env   # then edit HAULER_UI_PASSWORD
+docker compose -f deploy/docker-compose.yml up -d
 ```
 
-Access the UI at `http://localhost:8080`
+Access the UI at `http://localhost:8080` and log in with that password.
+
+By default Wagon is only reachable from the machine it runs on. See
+[Exposing Wagon to other machines](#exposing-wagon-to-other-machines).
 
 ### First Steps
 
@@ -139,7 +144,10 @@ Wagon is configured via environment variables.
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `PORT` | `8080` | HTTP UI/API server port (now honored in code) |
-| `HAULER_UI_PASSWORD` | (empty) | Optional shared password for UI login; empty disables auth |
+| `HAULER_UI_PASSWORD` | (none, **required**) | Shared password for UI/API login. Wagon refuses to start if it is empty |
+| `HAULER_UI_BIND_ADDR` | `127.0.0.1` | Compose only: host address the ports are published on. Set deliberately to expose Wagon |
+| `HAULER_UI_TRUSTED_ORIGINS` | (empty) | Comma-separated extra origins allowed to make changes (reverse proxy that rewrites `Host`) |
+| `HAULER_UI_INSECURE_NO_AUTH` | `false` | **Danger.** `true` allows starting with no password, i.e. no authentication at all. Local throwaway testing only |
 | `HAULER_UI_LOGIN_RATE` | `5` | Max login attempts per minute per client IP (429 beyond) |
 | `HAULER_UI_TRUST_PROXY` | `false` | When true, trust the rightmost `X-Forwarded-For` hop for login rate-limit IP keying (only behind a trusted reverse proxy) |
 
@@ -198,17 +206,38 @@ services:
   wagon:
     image: ghcr.io/alphabravo-oss/wagon:latest
     ports:
-      - "8080:8080"   # Main UI
-      - "5000:5000"   # Registry serve
-      - "5001:5001"   # Fileserver serve
+      - "127.0.0.1:8080:8080"   # Main UI (this host only)
+      - "127.0.0.1:5000:5000"   # Registry serve
+      - "127.0.0.1:5001:5001"   # Fileserver serve
     volumes:
       - wagon-data:/data
     environment:
-      - HAULER_UI_PASSWORD=your-password  # Optional
+      - HAULER_UI_PASSWORD=your-password  # Required
 
 volumes:
   wagon-data:
 ```
+
+### Exposing Wagon to other machines
+
+Wagon's defaults are local-only: ports are published on `127.0.0.1`, and a
+UI password is required. To make it reachable from other machines, do it
+deliberately:
+
+1. Keep a strong `HAULER_UI_PASSWORD` set.
+2. Publish on a specific interface: set `HAULER_UI_BIND_ADDR` in `deploy/.env`
+   to that interface's IP (or `0.0.0.0` for all interfaces), or use
+   `-p <ip>:8080:8080` with `docker run`.
+3. Prefer a TLS-terminating reverse proxy in front of the UI. If the proxy
+   rewrites the `Host` header, list the public origin in
+   `HAULER_UI_TRUSTED_ORIGINS` (e.g. `https://wagon.example.com`).
+4. Set `HAULER_UI_PUBLISH_USER` / `HAULER_UI_PUBLISH_PASSWORD` if the published
+   registry port should not be open to that network.
+
+State-changing API requests from a different browser origin are rejected
+(403), and JSON endpoints require `Content-Type: application/json` (415
+otherwise). Jobs are created through the typed endpoints (store, registry,
+...); there is no generic command endpoint.
 
 ### Kubernetes
 
