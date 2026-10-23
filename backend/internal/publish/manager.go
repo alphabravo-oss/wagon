@@ -541,6 +541,15 @@ func (m *Manager) List(ctx context.Context) []Route {
 	return routes
 }
 
+// IsPublished reports whether a haul is currently in the desired (published)
+// set. The /h/ file endpoints must refuse hauls that are not published.
+func (m *Manager) IsPublished(haulID int64) bool {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	_, ok := m.desired[haulID]
+	return ok
+}
+
 // resolveHost maps an incoming Host header to a published haul id.
 func (m *Manager) resolveHost(host string) (int64, bool) {
 	host = strings.ToLower(host)
