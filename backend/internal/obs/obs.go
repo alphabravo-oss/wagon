@@ -9,6 +9,7 @@
 package obs
 
 import (
+	"bytes"
 	"fmt"
 	"log/slog"
 	"net"
@@ -74,6 +75,12 @@ var registry = struct {
 }
 
 func observe(method string, code int, dur time.Duration) {
+	switch method {
+	case http.MethodGet, http.MethodHead, http.MethodPost, http.MethodPut, http.MethodPatch,
+		http.MethodDelete, http.MethodConnect, http.MethodOptions, http.MethodTrace:
+	default:
+		method = "other"
+	}
 	registry.mu.Lock()
 	defer registry.mu.Unlock()
 	registry.reqTotal[method+"|"+strconv.Itoa(code)]++
@@ -99,17 +106,11 @@ func SetPublishedHauls(n int) {
 // MetricsHandler serves the current metrics in Prometheus text exposition format.
 func MetricsHandler() http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		var buf bytes.Buffer
 		registry.mu.Lock()
-		defer registry.mu.Unlock()
 
-		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
-
-		var writeErr error
 		write := func(format string, args ...any) {
-			if writeErr != nil {
-				return // client gone; skip further writes
-			}
-			_, writeErr = fmt.Fprintf(w, format, args...)
+			_, _ = fmt.Fprintf(&buf, format, args...)
 		}
 
 		write("# HELP haulerui_http_requests_total Total HTTP requests handled.\n")
@@ -135,6 +136,10 @@ func MetricsHandler() http.Handler {
 		write("# HELP haulerui_published_hauls Number of currently published hauls.\n")
 		write("# TYPE haulerui_published_hauls gauge\n")
 		write("haulerui_published_hauls %d\n", registry.hauls)
+		registry.mu.Unlock()
+
+		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
+		_, _ = w.Write(buf.Bytes())
 	})
 }
 
