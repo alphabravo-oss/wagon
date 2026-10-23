@@ -28,7 +28,11 @@ func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
 	if err != nil {
 		t.Fatalf("opening database: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
 
 	// Create the subset of schema the store handler relies on.
 	_, err = db.Exec(`
@@ -214,7 +218,9 @@ func TestCopyHandler_ValidRegistryTarget(t *testing.T) {
 	}
 
 	// Clean up job
-	db.Exec("DELETE FROM jobs WHERE id = ?", job.ID)
+	if _, err := db.Exec("DELETE FROM jobs WHERE id = ?", job.ID); err != nil {
+		t.Errorf("clean up job: %v", err)
+	}
 }
 
 func TestCopyHandler_ValidDirTarget(t *testing.T) {
@@ -264,7 +270,9 @@ func TestCopyHandler_ValidDirTarget(t *testing.T) {
 	}
 
 	// Clean up job
-	db.Exec("DELETE FROM jobs WHERE id = ?", job.ID)
+	if _, err := db.Exec("DELETE FROM jobs WHERE id = ?", job.ID); err != nil {
+		t.Errorf("clean up job: %v", err)
+	}
 }
 
 func TestCopyHandler_PlainHTTPFlag(t *testing.T) {
@@ -312,7 +320,9 @@ func TestCopyHandler_PlainHTTPFlag(t *testing.T) {
 	}
 
 	// Clean up job
-	db.Exec("DELETE FROM jobs WHERE id = ?", job.ID)
+	if _, err := db.Exec("DELETE FROM jobs WHERE id = ?", job.ID); err != nil {
+		t.Errorf("clean up job: %v", err)
+	}
 }
 
 func TestCopyHandler_OnlyAttestations(t *testing.T) {
@@ -360,5 +370,7 @@ func TestCopyHandler_OnlyAttestations(t *testing.T) {
 	}
 
 	// Clean up job
-	db.Exec("DELETE FROM jobs WHERE id = ?", job.ID)
+	if _, err := db.Exec("DELETE FROM jobs WHERE id = ?", job.ID); err != nil {
+		t.Errorf("clean up job: %v", err)
+	}
 }

@@ -161,7 +161,11 @@ func TestPortInUse_BoundListenerIgnored(t *testing.T) {
 	if err != nil {
 		t.Fatalf("listen: %v", err)
 	}
-	defer ln.Close()
+	defer func() {
+		if err := ln.Close(); err != nil {
+			t.Errorf("close ln: %v", err)
+		}
+	}()
 	boundPort := ln.Addr().(*net.TCPAddr).Port
 
 	if e.handler.portInUse(boundPort) {

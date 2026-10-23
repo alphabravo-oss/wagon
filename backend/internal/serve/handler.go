@@ -256,8 +256,8 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 // monitorProcess monitors a running process and captures its output
 func (h *Handler) monitorProcess(pid int, cmd *exec.Cmd, stdout, stderr io.ReadCloser) {
 	// Close pipes when done
-	defer stdout.Close()
-	defer stderr.Close()
+	defer func() { _ = stdout.Close() }() // pipes already closed by Wait
+	defer func() { _ = stderr.Close() }() // pipes already closed by Wait
 
 	// Wait for process to complete
 	err := cmd.Wait()
@@ -478,7 +478,7 @@ func (h *Handler) queryProcesses(serveType, haulFilter string) ([]map[string]int
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	processes := []map[string]interface{}{}
 	for rows.Next() {

@@ -19,9 +19,17 @@ func setupTestDB(t *testing.T) *sql.DB {
 	if err != nil {
 		t.Fatalf("creating temp file: %v", err)
 	}
-	defer f.Close()
+	defer func() {
+		if err := f.Close(); err != nil {
+			t.Errorf("close f: %v", err)
+		}
+	}()
 	name := f.Name()
-	t.Cleanup(func() { os.Remove(name) })
+	t.Cleanup(func() {
+		if err := os.Remove(name); err != nil && !os.IsNotExist(err) {
+			t.Errorf("remove temp file: %v", err)
+		}
+	})
 
 	db, err := sql.Open("sqlite", name)
 	if err != nil {
@@ -33,7 +41,11 @@ func setupTestDB(t *testing.T) *sql.DB {
 	// TestGetLogsWithSince flaky (nil GetJob result -> panic) on CI runners.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
 
 	// Create schema
 	_, err = db.Exec(`
