@@ -82,6 +82,44 @@ func (l *loginLimiter) allow(key string) (bool, time.Duration) {
 	return ok, retryAfter
 }
 
+// peek reports whether the key's existing bucket has a token after refill,
+// without changing limiter state. It skips charge()'s expired-entry clearing,
+// so for unknown keys (including when the map is full) it defers to charge().
+func (l *loginLimiter) peek(key string) (bool, time.Duration) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	b := l.buckets[key]
+	if b == nil {
+		return true, 0
+	}
+	tokens := l.refilledTokens(b, time.Now())
+	return tokens >= 1, l.tokenWait(tokens)
+}
+
+func (l *loginLimiter) refilledTokens(b *tokenBucket, now time.Time) float64 {
+	if b == nil {
+		return l.capacity
+	}
+	tokens := b.tokens + now.Sub(b.lastSeen).Seconds()*l.refillRate
+	if tokens > l.capacity {
+		tokens = l.capacity
+	}
+	return tokens
+}
+
+func (l *loginLimiter) tokenWait(tokens float64) time.Duration {
+	if tokens >= 1 {
+		return 0
+	}
+	needed := 1 - tokens
+	wait := time.Duration(needed / l.refillRate * float64(time.Second))
+	if wait < time.Second {
+		wait = time.Second
+	}
+	return wait
+}
+
 // charge is allow that also returns the bucket it charged (its own bucket, a
 // new one, or the shared overflow bucket), so a refund can credit that exact
 // bucket instead of looking the key up again.
@@ -107,11 +145,7 @@ func (l *loginLimiter) charge(key string) (bool, time.Duration, *tokenBucket) {
 		b = &tokenBucket{tokens: l.capacity, lastSeen: now}
 		l.buckets[key] = b
 	} else {
-		elapsed := now.Sub(b.lastSeen).Seconds()
-		b.tokens += elapsed * l.refillRate
-		if b.tokens > l.capacity {
-			b.tokens = l.capacity
-		}
+		b.tokens = l.refilledTokens(b, now)
 	}
 	b.lastSeen = now
 
@@ -120,13 +154,7 @@ func (l *loginLimiter) charge(key string) (bool, time.Duration, *tokenBucket) {
 		return true, 0, b
 	}
 
-	// Not enough tokens: compute how long until one token is available.
-	needed := 1 - b.tokens
-	wait := time.Duration(needed / l.refillRate * float64(time.Second))
-	if wait < time.Second {
-		wait = time.Second
-	}
-	return false, wait, b
+	return false, l.tokenWait(b.tokens), b
 }
 
 // refund credits exactly the bucket charge() charged. If that bucket was
@@ -219,12 +247,18 @@ func ipv6Prefix48Key(ip string) (string, bool) {
 	return prefix.String(), true
 }
 
-// Middleware limits logins per IPv4 address or IPv6 /64 and /48. When a limit is
-// exceeded it responds 429 with a Retry-After header instead of calling next.
+// Middleware limits logins per IPv4 address or IPv6 /64 and /48, returning 429
+// with Retry-After on denial. Already-empty per-key buckets leave /48 untouched.
 func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
-		ok, retryAfter := true, time.Duration(0)
+		key := rateLimitKey(ip)
+		// Advisory only: charge and refund below remain authoritative.
+		ok, retryAfter := l.peek(key)
+		if !ok {
+			tooManyLoginAttempts(w, retryAfter)
+			return
+		}
 		key48, isIPv6 := ipv6Prefix48Key(ip)
 		checkPrefix48 := isIPv6 && l.prefix48 != nil
 		var b48 *tokenBucket
@@ -232,21 +266,26 @@ func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 			ok, retryAfter, b48 = l.prefix48.charge(key48)
 		}
 		if ok {
-			ok, retryAfter = l.allow(rateLimitKey(ip))
+			ok, retryAfter = l.allow(key)
 			if !ok && checkPrefix48 {
 				// Denied /64 requests must not drain the shared /48 bucket.
 				l.prefix48.refund(b48)
 			}
 		}
 		if !ok {
-			secs := int(retryAfter.Seconds())
-			if secs < 1 {
-				secs = 1
-			}
-			w.Header().Set("Retry-After", strconv.Itoa(secs))
-			http.Error(w, "Too many login attempts", http.StatusTooManyRequests)
+			tooManyLoginAttempts(w, retryAfter)
 			return
 		}
 		next.ServeHTTP(w, r)
 	})
+}
+
+// tooManyLoginAttempts writes a 429 with a Retry-After of at least one second.
+func tooManyLoginAttempts(w http.ResponseWriter, retryAfter time.Duration) {
+	secs := int(retryAfter.Seconds())
+	if secs < 1 {
+		secs = 1
+	}
+	w.Header().Set("Retry-After", strconv.Itoa(secs))
+	http.Error(w, "Too many login attempts", http.StatusTooManyRequests)
 }
