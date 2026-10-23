@@ -12,11 +12,13 @@ import (
 )
 
 const maxLoginBuckets = 10000
+const ipv6Prefix48Multiplier = 10
 
 // loginLimiter is a small rate limiter built on the standard library only.
 // Keys are per IPv4 address or per IPv6 /64: each bucket refills at a steady
 // rate and starts with a small burst so a legitimate user who fat-fingers their
 // password a couple of times is not blocked, while a brute-force loop is.
+// IPv6 also has a coarser /48 limit to bound bucket creation across /64s.
 //
 // It is intended to guard the login endpoint only. Do NOT wrap registry or
 // content endpoints with it — that would throttle legitimate pulls.
@@ -25,6 +27,7 @@ type loginLimiter struct {
 	buckets   map[string]*tokenBucket
 	overflow  *tokenBucket
 	lastEvict time.Time
+	prefix48  *loginLimiter
 
 	// refillRate is tokens added per second.
 	refillRate float64
@@ -53,6 +56,7 @@ func loginRatePerMinute() int {
 
 // newLoginLimiter constructs a limiter allowing ~ratePerMinute attempts per
 // minute per IPv4 address or IPv6 /64, with a burst equal to the per-minute rate.
+// IPv6 /48s share a separate limit at ten times that rate and burst.
 func newLoginLimiter() *loginLimiter {
 	rpm := loginRatePerMinute()
 	return &loginLimiter{
@@ -60,6 +64,12 @@ func newLoginLimiter() *loginLimiter {
 		refillRate: float64(rpm) / 60.0,
 		capacity:   float64(rpm),
 		ttl:        10 * time.Minute,
+		prefix48: &loginLimiter{
+			buckets:    make(map[string]*tokenBucket),
+			refillRate: float64(rpm) / 60.0 * ipv6Prefix48Multiplier,
+			capacity:   float64(rpm) * ipv6Prefix48Multiplier,
+			ttl:        10 * time.Minute,
+		},
 	}
 }
 
@@ -171,11 +181,32 @@ func rateLimitKey(ip string) string {
 	return prefix.String()
 }
 
-// Middleware limits logins per IPv4 address or IPv6 /64. When the limit is
+// ipv6Prefix48Key groups native IPv6 clients by /48, excluding mapped IPv4.
+func ipv6Prefix48Key(ip string) (string, bool) {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return "", false
+	}
+	addr = addr.WithZone("").Unmap()
+	if !addr.Is6() {
+		return "", false
+	}
+	prefix, _ := addr.Prefix(48)
+	return prefix.String(), true
+}
+
+// Middleware limits logins per IPv4 address or IPv6 /64 and /48. When a limit is
 // exceeded it responds 429 with a Retry-After header instead of calling next.
 func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, retryAfter := l.allow(rateLimitKey(clientIP(r)))
+		ip := clientIP(r)
+		ok, retryAfter := true, time.Duration(0)
+		if key, isIPv6 := ipv6Prefix48Key(ip); isIPv6 && l.prefix48 != nil {
+			ok, retryAfter = l.prefix48.allow(key)
+		}
+		if ok {
+			ok, retryAfter = l.allow(rateLimitKey(ip))
+		}
 		if !ok {
 			secs := int(retryAfter.Seconds())
 			if secs < 1 {
