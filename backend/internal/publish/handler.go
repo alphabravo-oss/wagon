@@ -165,6 +165,12 @@ func (h *Handler) handleFiles(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "haul not found", http.StatusNotFound)
 		return
 	}
+	// Only serve files for a haul that is currently published; an unpublished
+	// haul's content is not reachable even when publish auth is unset.
+	if !h.mgr.IsPublished(haul.ID) {
+		http.Error(w, "haul not found", http.StatusNotFound)
+		return
+	}
 
 	if name == "" {
 		serveFileList(w, haul.StoreDir)

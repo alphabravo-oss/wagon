@@ -2,10 +2,12 @@ package publish
 
 import (
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"os"
 	"path/filepath"
+	"regexp"
 	"strings"
 )
 
@@ -27,13 +29,30 @@ type FileEntry struct {
 	Digest string `json:"digest"` // content layer digest
 }
 
-// blobPath maps a "sha256:hex" digest to its on-disk blob path.
-func blobPath(storeDir, digest string) string {
-	hex := digest
-	if i := strings.IndexByte(hex, ':'); i != -1 {
-		hex = hex[i+1:]
+// digestRE matches a canonical sha256 OCI digest. Digests come from store
+// metadata (index.json and manifests), which is not trusted to be well formed.
+var digestRE = regexp.MustCompile(`^sha256:[0-9a-f]{64}$`)
+
+// errBadDigest is returned for a digest that is not a canonical sha256 digest.
+var errBadDigest = errors.New("invalid digest")
+
+// blobPath maps a canonical "sha256:<64 hex>" digest to its on-disk blob path.
+// Anything else is rejected so a digest can never steer the path outside the
+// store's blob directory.
+func blobPath(storeDir, digest string) (string, error) {
+	if !digestRE.MatchString(digest) {
+		return "", errBadDigest
 	}
-	return filepath.Join(storeDir, "blobs", "sha256", hex)
+	return filepath.Join(storeDir, "blobs", "sha256", strings.TrimPrefix(digest, "sha256:")), nil
+}
+
+// readBlob reads a blob by digest, rejecting non-canonical digests.
+func readBlob(storeDir, digest string) ([]byte, error) {
+	p, err := blobPath(storeDir, digest)
+	if err != nil {
+		return nil, err
+	}
+	return os.ReadFile(p)
 }
 
 // readIndexManifestDigests returns the digests of the OCI manifests listed in a
@@ -71,7 +90,7 @@ func listFiles(storeDir string) ([]FileEntry, error) {
 	var entries []FileEntry
 	seen := map[string]bool{}
 	for _, d := range digests {
-		data, err := os.ReadFile(blobPath(storeDir, d))
+		data, err := readBlob(storeDir, d)
 		if err != nil {
 			continue
 		}
@@ -81,7 +100,7 @@ func listFiles(storeDir string) ([]FileEntry, error) {
 		}
 		for _, layer := range man.Layers {
 			title := layer.Annotations["org.opencontainers.image.title"]
-			if title == "" || seen[title] {
+			if title == "" || seen[title] || !digestRE.MatchString(layer.Digest) {
 				continue
 			}
 			seen[title] = true
@@ -98,7 +117,7 @@ func findFileLayer(storeDir, name string) (digest string, size int64, ok bool) {
 		return "", 0, false
 	}
 	for _, d := range digests {
-		data, err := os.ReadFile(blobPath(storeDir, d))
+		data, err := readBlob(storeDir, d)
 		if err != nil {
 			continue
 		}
@@ -107,7 +126,7 @@ func findFileLayer(storeDir, name string) (digest string, size int64, ok bool) {
 			continue
 		}
 		for _, layer := range man.Layers {
-			if layer.Annotations["org.opencontainers.image.title"] == name {
+			if layer.Annotations["org.opencontainers.image.title"] == name && digestRE.MatchString(layer.Digest) {
 				return layer.Digest, layer.Size, true
 			}
 		}
@@ -140,7 +159,12 @@ func serveFile(w http.ResponseWriter, r *http.Request, storeDir, name string) {
 		http.Error(w, "file not found", http.StatusNotFound)
 		return
 	}
-	f, err := os.Open(blobPath(storeDir, digest))
+	path, err := blobPath(storeDir, digest)
+	if err != nil {
+		http.Error(w, "file not found", http.StatusNotFound)
+		return
+	}
+	f, err := os.Open(path)
 	if err != nil {
 		http.Error(w, "blob not found", http.StatusNotFound)
 		return
