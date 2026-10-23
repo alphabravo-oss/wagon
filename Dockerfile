@@ -11,7 +11,7 @@ FROM golang:1.26.10-alpine AS backend-builder
 
 WORKDIR /backend
 COPY backend/go.mod backend/go.sum* ./
-RUN go mod download || true
+RUN go mod download
 COPY backend/ ./
 RUN CGO_ENABLED=0 go build -o /app/server .
 
@@ -20,9 +20,12 @@ FROM alpine:3.20
 RUN apk add --no-cache ca-certificates
 
 # Install hauler CLI (pinned version 1.3.2, multi-arch aware)
+# TARGETARCH is set by BuildKit/buildx; the classic builder leaves it empty, so
+# fall back to the build host's architecture.
 ARG TARGETPLATFORM
 ARG TARGETARCH
 RUN apk add --no-cache curl && \
+    TARGETARCH="${TARGETARCH:-$(apk --print-arch | sed -e 's/^x86_64$/amd64/' -e 's/^aarch64$/arm64/')}" && \
     HAULER_VERSION="1.3.2" && \
     curl -sfSL "https://github.com/hauler-dev/hauler/releases/download/v${HAULER_VERSION}/hauler_${HAULER_VERSION}_checksums.txt" -o /tmp/checksums.txt && \
     curl -sfSL "https://github.com/hauler-dev/hauler/releases/download/v${HAULER_VERSION}/hauler_${HAULER_VERSION}_linux_${TARGETARCH}.tar.gz" -o /tmp/hauler.tar.gz && \
