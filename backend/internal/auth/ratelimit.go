@@ -10,6 +10,8 @@ import (
 	"time"
 )
 
+const maxLoginBuckets = 10000
+
 // loginLimiter is a small per-client-IP rate limiter built on the standard
 // library only. It uses a token-bucket per IP: each bucket refills at a steady
 // rate and starts with a small burst so a legitimate user who fat-fingers their
@@ -18,8 +20,10 @@ import (
 // It is intended to guard the login endpoint only. Do NOT wrap registry or
 // content endpoints with it — that would throttle legitimate pulls.
 type loginLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*tokenBucket
+	mu        sync.Mutex
+	buckets   map[string]*tokenBucket
+	overflow  *tokenBucket
+	lastEvict time.Time
 
 	// refillRate is tokens added per second.
 	refillRate float64
@@ -67,9 +71,18 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.evictStaleLocked(now)
+	if now.Sub(l.lastEvict) >= time.Minute || (l.buckets[ip] == nil && len(l.buckets) >= maxLoginBuckets) {
+		l.evictStaleLocked(now)
+	}
 
 	b := l.buckets[ip]
+	if b == nil && len(l.buckets) >= maxLoginBuckets {
+		// Keep the shared overflow bucket outside the capped per-IP map.
+		if l.overflow == nil {
+			l.overflow = &tokenBucket{tokens: l.capacity, lastSeen: now}
+		}
+		b = l.overflow
+	}
 	if b == nil {
 		b = &tokenBucket{tokens: l.capacity, lastSeen: now}
 		l.buckets[ip] = b
@@ -98,6 +111,7 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 
 // evictStaleLocked removes buckets idle longer than ttl. Caller must hold l.mu.
 func (l *loginLimiter) evictStaleLocked(now time.Time) {
+	l.lastEvict = now
 	for ip, b := range l.buckets {
 		if now.Sub(b.lastSeen) > l.ttl {
 			delete(l.buckets, ip)

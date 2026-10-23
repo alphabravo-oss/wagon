@@ -2,9 +2,91 @@ package auth
 
 import (
 	"net/http"
+	"strconv"
 	"testing"
 	"time"
 )
+
+func TestLimiterBoundsBucketsAndSharesOverflow(t *testing.T) {
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	l.refillRate = 0 // Make the overflow capacity deterministic.
+	for i := 0; i < maxLoginBuckets+500; i++ {
+		ok, _ := l.allow(strconv.Itoa(i))
+		wantAllowed := i < maxLoginBuckets+5
+		if ok != wantAllowed {
+			t.Fatalf("key %d: allowed=%v, want %v", i, ok, wantAllowed)
+		}
+		if len(l.buckets) > maxLoginBuckets {
+			t.Fatalf("bucket count exceeded cap: %d", len(l.buckets))
+		}
+	}
+	if len(l.buckets) != maxLoginBuckets {
+		t.Fatalf("bucket count = %d, want %d", len(l.buckets), maxLoginBuckets)
+	}
+	for i := 0; i < 4; i++ {
+		if ok, _ := l.allow("0"); !ok {
+			t.Fatal("overflow exhausted an existing key's bucket")
+		}
+	}
+	if ok, _ := l.allow("0"); ok {
+		t.Fatal("existing key should be limited after five requests")
+	}
+
+	// A new key at the cap triggers eviction even before a minute passes.
+	l.buckets["1"].lastSeen = time.Now().Add(-l.ttl - time.Second)
+	l.lastEvict = time.Now()
+	if ok, _ := l.allow("new-key"); !ok {
+		t.Fatal("new key should use space freed by eviction")
+	}
+	if l.buckets["1"] != nil || l.buckets["new-key"] == nil || len(l.buckets) != maxLoginBuckets {
+		t.Fatal("eviction at the cap should replace the stale bucket")
+	}
+}
+
+func TestLimiterDefaultCapacityAndRefill(t *testing.T) {
+	t.Setenv("HAULER_UI_LOGIN_RATE", "")
+	l := newLoginLimiter()
+	for i := 0; i < 5; i++ {
+		if ok, _ := l.allow("ip-a"); !ok {
+			t.Fatalf("attempt %d should be allowed", i+1)
+		}
+	}
+	if ok, wait := l.allow("ip-a"); ok || wait <= 0 {
+		t.Fatalf("sixth attempt should be limited: ok=%v, wait=%v", ok, wait)
+	}
+	if ok, _ := l.allow("ip-b"); !ok {
+		t.Fatal("distinct keys should have independent buckets")
+	}
+	l.buckets["ip-a"].lastSeen = time.Now().Add(-13 * time.Second)
+	if ok, _ := l.allow("ip-a"); !ok {
+		t.Fatal("bucket should refill one token after 13 seconds")
+	}
+	if ok, _ := l.allow("ip-a"); ok {
+		t.Fatal("refill should not restore the entire burst")
+	}
+}
+
+func TestLimiterEvictionInterval(t *testing.T) {
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	l.allow("stale")
+	l.buckets["stale"].lastSeen = time.Now().Add(-l.ttl - time.Second)
+	lastEvict := time.Now()
+	l.lastEvict = lastEvict
+	l.allow("active")
+	if l.buckets["stale"] == nil || !l.lastEvict.Equal(lastEvict) {
+		t.Fatal("eviction should not run again within a minute below the cap")
+	}
+	l.lastEvict = time.Now().Add(-time.Minute - time.Second)
+	l.allow("active")
+	if l.buckets["stale"] != nil {
+		t.Fatal("eviction should remove buckets idle longer than ttl")
+	}
+	if l.buckets["active"] == nil || !l.lastEvict.After(lastEvict) {
+		t.Fatal("eviction should retain active buckets and update lastEvict")
+	}
+}
 
 // TestClientIP_IgnoresXFFByDefault is the security-critical case: with no
 // trusted proxy configured, a spoofed X-Forwarded-For must NOT change the key,
