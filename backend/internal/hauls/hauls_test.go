@@ -18,7 +18,11 @@ func newTestService(t *testing.T) *Service {
 	if err != nil {
 		t.Fatalf("opening test database: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
 	cfg := &config.Config{DataDir: t.TempDir()}
 	return NewService(db.DB, cfg)
 }
