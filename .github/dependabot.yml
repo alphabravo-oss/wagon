@@ -7,6 +7,9 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      go-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "npm"
     directory: "/web"
@@ -15,6 +18,12 @@ updates:
     open-pull-requests-limit: 10
     commit-message:
       prefix: "chore(deps)"
+    groups:
+      # react and react-dom must always move together (same exact version).
+      react:
+        patterns: ["react", "react-dom", "@types/react", "@types/react-dom"]
+      npm-minor-patch:
+        update-types: ["minor", "patch"]
 
   - package-ecosystem: "github-actions"
     directory: "/"
@@ -22,3 +31,6 @@ updates:
       interval: "weekly"
     commit-message:
       prefix: "ci"
+    groups:
+      actions-minor-patch:
+        update-types: ["minor", "patch"]
