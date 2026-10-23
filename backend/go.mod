@@ -1,8 +1,10 @@
 module github.com/alphabravo-oss/wagon/backend
 
-go 1.24.0
+go 1.26.0
 
-toolchain go1.24.12
+toolchain go1.26.10
+
+require modernc.org/sqlite v1.44.3
 
 require (
 	github.com/dustin/go-humanize v1.0.1 // indirect
@@ -15,5 +17,4 @@ require (
 	modernc.org/libc v1.67.6 // indirect
 	modernc.org/mathutil v1.7.1 // indirect
 	modernc.org/memory v1.11.0 // indirect
-	modernc.org/sqlite v1.44.3 // indirect
 )
