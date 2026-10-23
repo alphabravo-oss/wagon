@@ -1,4 +1,4 @@
-import { useState, useEffect } from 'react'
+import { useState, useEffect, useCallback } from 'react'
 import { Package, Folder } from 'lucide-react'
 import { useHauls } from '../contexts/HaulContext.jsx'
 
@@ -31,10 +31,15 @@ function Serve() {
   const [error, setError] = useState(null)
   const [submitting, setSubmitting] = useState(false)
 
+  // Process lists are scoped to the active haul. The fetchers depend on its id
+  // so switching hauls re-fetches immediately and the polling interval below is
+  // re-created instead of continuing to poll the previously active haul.
+  const activeHaulId = activeHaul?.id
+  const haulQuery = activeHaulId != null ? `?haul=${activeHaulId}` : ''
+
   // Fetch registry processes
-  const fetchRegistryProcesses = async () => {
+  const fetchRegistryProcesses = useCallback(async () => {
     try {
-      const haulQuery = activeHaul ? `?haul=${activeHaul.id}` : ''
       const res = await fetch(`/api/serve/registry${haulQuery}`)
       if (res.ok) {
         const data = await res.json()
@@ -45,12 +50,11 @@ function Serve() {
     } finally {
       setRegistryLoading(false)
     }
-  }
+  }, [haulQuery])
 
   // Fetch fileserver processes
-  const fetchFileserverProcesses = async () => {
+  const fetchFileserverProcesses = useCallback(async () => {
     try {
-      const haulQuery = activeHaul ? `?haul=${activeHaul.id}` : ''
       const res = await fetch(`/api/serve/fileserver${haulQuery}`)
       if (res.ok) {
         const data = await res.json()
@@ -61,7 +65,7 @@ function Serve() {
     } finally {
       setFileserverLoading(false)
     }
-  }
+  }, [haulQuery])
 
   useEffect(() => {
     fetchRegistryProcesses()
@@ -71,7 +75,7 @@ function Serve() {
       fetchFileserverProcesses()
     }, 5000)
     return () => clearInterval(interval)
-  }, [])
+  }, [fetchRegistryProcesses, fetchFileserverProcesses])
 
   const handleStartRegistry = async (e) => {
     e.preventDefault()
