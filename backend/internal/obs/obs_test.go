@@ -8,7 +8,31 @@ import (
 	"time"
 )
 
+// resetMetrics gives the calling test an empty metrics registry and restores
+// the previous state afterwards, so exact-count assertions hold under
+// go test -count=N and regardless of what other tests in the package observed.
+func resetMetrics(t *testing.T) {
+	t.Helper()
+	registry.mu.Lock()
+	prevReq, prevSum, prevCount := registry.reqTotal, registry.durSum, registry.durCount
+	prevJobs, prevHauls := registry.jobs, registry.hauls
+	registry.reqTotal = map[string]int64{}
+	registry.durSum = map[string]float64{}
+	registry.durCount = map[string]int64{}
+	registry.jobs = map[string]int{}
+	registry.hauls = 0
+	registry.mu.Unlock()
+
+	t.Cleanup(func() {
+		registry.mu.Lock()
+		defer registry.mu.Unlock()
+		registry.reqTotal, registry.durSum, registry.durCount = prevReq, prevSum, prevCount
+		registry.jobs, registry.hauls = prevJobs, prevHauls
+	})
+}
+
 func TestMetricsExposition(t *testing.T) {
+	resetMetrics(t)
 	observe("GET", 200, 150*time.Millisecond)
 	observe("GET", 200, 50*time.Millisecond)
 	observe("POST", 500, 10*time.Millisecond)

@@ -390,9 +390,8 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to create file", http.StatusInternalServerError)
 		return
 	}
-	defer destFile.Close()
 
-	written, err := io.Copy(destFile, file)
+	written, err := copyAndClose(destFile, file)
 	if err != nil {
 		log.Printf("Error copying file: %v", err)
 		if err := os.Remove(destinationPath); err != nil && !os.IsNotExist(err) {
@@ -455,4 +454,19 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		"jobId":    job.ID,
 		"haulId":   haul.ID,
 	})
+}
+
+// copyAndClose copies src into dst and closes dst, returning the Close error
+// when the copy itself succeeded so an incompletely flushed upload is treated
+// as a failed save rather than handed to a load job.
+func copyAndClose(dst io.WriteCloser, src io.Reader) (int64, error) {
+	written, err := io.Copy(dst, src)
+	if err != nil {
+		_ = dst.Close() // already failing; the copy error is the one to report
+		return written, err
+	}
+	if err := dst.Close(); err != nil {
+		return written, fmt.Errorf("close: %w", err)
+	}
+	return written, nil
 }

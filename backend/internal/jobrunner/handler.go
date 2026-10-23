@@ -1,7 +1,6 @@
 package jobrunner
 
 import (
-	"context"
 	"encoding/json"
 	"fmt"
 	"log"
@@ -30,51 +29,6 @@ func NewHandler(runner *Runner, cfg *config.Config) *Handler {
 	}
 }
 
-// CreateJobRequest represents the request to create a new job
-type CreateJobRequest struct {
-	Command      string            `json:"command"`
-	Args         []string          `json:"args"`
-	EnvOverrides map[string]string `json:"envOverrides"`
-}
-
-// CreateJob handles POST /api/jobs
-func (h *Handler) CreateJob(w http.ResponseWriter, r *http.Request) {
-	if r.Method != http.MethodPost {
-		http.Error(w, "Method not allowed", http.StatusMethodNotAllowed)
-		return
-	}
-
-	var req CreateJobRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return
-	}
-
-	if req.Command == "" {
-		http.Error(w, "command is required", http.StatusBadRequest)
-		return
-	}
-
-	job, err := h.runner.CreateJob(r.Context(), req.Command, req.Args, req.EnvOverrides)
-	if err != nil {
-		log.Printf("Error creating job: %v", err)
-		http.Error(w, "Failed to create job", http.StatusInternalServerError)
-		return
-	}
-
-	// Start the job in background
-	go func() {
-		if err := h.runner.Start(context.Background(), job.ID); err != nil {
-			log.Printf("Error starting job %d: %v", job.ID, err)
-			h.notifyClients(job.ID)
-		}
-	}()
-
-	w.Header().Set("Content-Type", "application/json")
-	w.WriteHeader(http.StatusCreated)
-	_ = json.NewEncoder(w).Encode(job)
-}
-
 // GetJob handles GET /api/jobs/:id
 func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodGet {
@@ -100,7 +54,7 @@ func (h *Handler) GetJob(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(job)
+	_ = json.NewEncoder(w).Encode(job.Public())
 }
 
 // ListJobs handles GET /api/jobs
@@ -124,7 +78,7 @@ func (h *Handler) ListJobs(w http.ResponseWriter, r *http.Request) {
 	}
 
 	w.Header().Set("Content-Type", "application/json")
-	_ = json.NewEncoder(w).Encode(jobs)
+	_ = json.NewEncoder(w).Encode(publicJobs(jobs))
 }
 
 // GetJobLogs handles GET /api/jobs/:id/logs
@@ -186,7 +140,7 @@ func (h *Handler) StreamJobLogs(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "text/event-stream")
 	w.Header().Set("Cache-Control", "no-cache")
 	w.Header().Set("Connection", "keep-alive")
-	w.Header().Set("Access-Control-Allow-Origin", "*")
+	// No CORS headers: the stream is same-origin only.
 
 	// Flush headers
 	flusher, ok := w.(http.Flusher)
@@ -258,7 +212,7 @@ func (h *Handler) StreamJobLogs(w http.ResponseWriter, r *http.Request) {
 			// Exit if job is complete
 			if job.Status == StatusSucceeded || job.Status == StatusFailed {
 				// Send final completion event
-				_ = h.sendSSE(w, "complete", job)
+				_ = h.sendSSE(w, "complete", job.Public())
 				flusher.Flush()
 				return
 			}
@@ -289,7 +243,7 @@ func (h *Handler) StreamJobLogs(w http.ResponseWriter, r *http.Request) {
 
 // sendJobState sends the job state via SSE
 func (h *Handler) sendJobState(w http.ResponseWriter, job *Job) error {
-	return h.sendSSE(w, "state", job)
+	return h.sendSSE(w, "state", job.Public())
 }
 
 // sendSSE sends a server-sent event
@@ -332,18 +286,6 @@ func (h *Handler) unregisterClient(jobID int64, ch chan struct{}) {
 	}
 	if len(h.clients[jobID]) == 0 {
 		delete(h.clients, jobID)
-	}
-}
-
-// notifyClients notifies all clients listening for a job
-func (h *Handler) notifyClients(jobID int64) {
-	h.mu.RLock()
-	defer h.mu.RUnlock()
-	for _, ch := range h.clients[jobID] {
-		select {
-		case ch <- struct{}{}:
-		default:
-		}
 	}
 }
 
