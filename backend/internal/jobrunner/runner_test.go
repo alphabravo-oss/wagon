@@ -3,6 +3,9 @@ package jobrunner
 import (
 	"context"
 	"database/sql"
+	"errors"
+	"fmt"
+	"io"
 	"os"
 	"os/exec"
 	"strings"
@@ -428,5 +431,106 @@ func TestGetLogsWithSince(t *testing.T) {
 	// Should have fewer logs (all except possibly ones at exactly the since timestamp)
 	if len(partialLogs) > len(allLogs) {
 		t.Errorf("expected partial logs (%d) <= all logs (%d)", len(partialLogs), len(allLogs))
+	}
+}
+
+func TestStreamOutput(t *testing.T) {
+	const longLineBytes = 200 * 1024
+	capped := strings.Repeat("x", maxLogLineBytes)
+	for _, tt := range []struct {
+		name    string
+		input   string
+		readErr error
+		want    []string
+	}{
+		{
+			name:  "mixed lines",
+			input: "short\n\n" + strings.Repeat("x", longLineBytes) + "\nwindows\r\n\r\nPASSWORD=secret\nfinal",
+			want:  []string{"short", "", capped + fmt.Sprintf(" [truncated %d bytes]", longLineBytes-maxLogLineBytes), "windows", "", "PASSWORD=[REDACTED]", "final"},
+		},
+		{name: "empty"},
+		{name: "empty line", input: "\n", want: []string{""}},
+		{name: "final CR", input: "\r", want: []string{""}},
+		{name: "at cap CRLF", input: capped + "\r\n", want: []string{capped}},
+		{name: "at cap EOF", input: capped, want: []string{capped}},
+		{name: "over cap CRLF", input: capped + "x\r\n", want: []string{capped + " [truncated 1 bytes]"}},
+		{name: "over cap EOF", input: capped + "x", want: []string{capped + " [truncated 1 bytes]"}},
+		{name: "split CRLF", input: strings.Repeat("x", 4095) + "\r\n", want: []string{strings.Repeat("x", 4095)}},
+		{name: "retained CR", input: strings.Repeat("x", maxLogLineBytes-1) + "\rx\n", want: []string{strings.Repeat("x", maxLogLineBytes-1) + "\r [truncated 1 bytes]"}},
+		{name: "read error", input: "short\npartial\r", readErr: errors.New("broken stream"), want: []string{"short", "partial", "[stream error: broken stream]"}},
+	} {
+		t.Run(tt.name, func(t *testing.T) {
+			runner := New(setupTestDB(t), t.TempDir())
+			ctx := context.Background()
+			job, err := runner.CreateJob(ctx, "test", nil, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var reader io.Reader = strings.NewReader(tt.input)
+			if tt.readErr != nil {
+				reader = io.MultiReader(reader, streamErrorReader{tt.readErr})
+			}
+			runner.streamOutput(ctx, job.ID, reader, "stdout")
+			logs, err := runner.GetLogs(ctx, job.ID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(logs) != len(tt.want) {
+				t.Fatalf("got %d lines, want %d", len(logs), len(tt.want))
+			}
+			for i, want := range tt.want {
+				if logs[i].Stream != "stdout" || logs[i].Content != want {
+					t.Errorf("line %d mismatch: got stream %q and %d bytes, want stdout and %d bytes", i, logs[i].Stream, len(logs[i].Content), len(want))
+				}
+			}
+		})
+	}
+}
+
+type streamErrorReader struct{ err error }
+
+func (r streamErrorReader) Read([]byte) (int, error) { return 0, r.err }
+
+func TestJobExecutionWithLongLine(t *testing.T) {
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh unavailable")
+	}
+	runner := New(setupTestDB(t), t.TempDir())
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	job, err := runner.CreateJob(ctx, "/bin/sh", []string{"-c", "printf '%0204800d\\nnormal\\n' 0"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(ctx, job.ID); err != nil {
+		t.Fatal(err)
+	}
+	ticker := time.NewTicker(10 * time.Millisecond)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ctx.Done():
+			t.Fatal("timed out waiting for long-output job to succeed")
+		case <-ticker.C:
+			current, err := runner.GetJob(ctx, job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if current.Status == StatusFailed {
+				t.Fatal("job failed")
+			}
+			if current.Status != StatusSucceeded {
+				continue
+			}
+			logs, err := runner.GetLogs(ctx, job.ID, nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			want := strings.Repeat("0", maxLogLineBytes) + fmt.Sprintf(" [truncated %d bytes]", 204800-maxLogLineBytes)
+			if len(logs) != 2 || logs[0].Content != want || logs[1].Content != "normal" {
+				t.Fatal("expected truncated output followed by normal line")
+			}
+			return
+		}
 	}
 }
