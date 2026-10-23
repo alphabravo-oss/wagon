@@ -12,11 +12,13 @@ import (
 )
 
 const maxLoginBuckets = 10000
+const ipv6Prefix48Multiplier = 10
 
 // loginLimiter is a small rate limiter built on the standard library only.
 // Keys are per IPv4 address or per IPv6 /64: each bucket refills at a steady
 // rate and starts with a small burst so a legitimate user who fat-fingers their
 // password a couple of times is not blocked, while a brute-force loop is.
+// IPv6 also has a coarser /48 limit to bound bucket creation across /64s.
 //
 // It is intended to guard the login endpoint only. Do NOT wrap registry or
 // content endpoints with it — that would throttle legitimate pulls.
@@ -25,6 +27,7 @@ type loginLimiter struct {
 	buckets   map[string]*tokenBucket
 	overflow  *tokenBucket
 	lastEvict time.Time
+	prefix48  *loginLimiter
 
 	// refillRate is tokens added per second.
 	refillRate float64
@@ -53,6 +56,7 @@ func loginRatePerMinute() int {
 
 // newLoginLimiter constructs a limiter allowing ~ratePerMinute attempts per
 // minute per IPv4 address or IPv6 /64, with a burst equal to the per-minute rate.
+// IPv6 /48s share a separate limit at ten times that rate and burst.
 func newLoginLimiter() *loginLimiter {
 	rpm := loginRatePerMinute()
 	return &loginLimiter{
@@ -60,6 +64,12 @@ func newLoginLimiter() *loginLimiter {
 		refillRate: float64(rpm) / 60.0,
 		capacity:   float64(rpm),
 		ttl:        10 * time.Minute,
+		prefix48: &loginLimiter{
+			buckets:    make(map[string]*tokenBucket),
+			refillRate: float64(rpm) / 60.0 * ipv6Prefix48Multiplier,
+			capacity:   float64(rpm) * ipv6Prefix48Multiplier,
+			ttl:        10 * time.Minute,
+		},
 	}
 }
 
@@ -67,17 +77,25 @@ func newLoginLimiter() *loginLimiter {
 // caller should wait before retrying. It refills the bucket based on elapsed
 // time, consumes one token on success, and opportunistically evicts stale
 // entries so the map cannot grow unbounded.
-func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
+func (l *loginLimiter) allow(key string) (bool, time.Duration) {
+	ok, retryAfter, _ := l.charge(key)
+	return ok, retryAfter
+}
+
+// charge is allow that also returns the bucket it charged (its own bucket, a
+// new one, or the shared overflow bucket), so a refund can credit that exact
+// bucket instead of looking the key up again.
+func (l *loginLimiter) charge(key string) (bool, time.Duration, *tokenBucket) {
 	now := time.Now()
 
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	if now.Sub(l.lastEvict) >= time.Minute || (l.buckets[ip] == nil && len(l.buckets) >= maxLoginBuckets) {
+	if now.Sub(l.lastEvict) >= time.Minute || (l.buckets[key] == nil && len(l.buckets) >= maxLoginBuckets) {
 		l.evictStaleLocked(now)
 	}
 
-	b := l.buckets[ip]
+	b := l.buckets[key]
 	if b == nil && len(l.buckets) >= maxLoginBuckets {
 		// Keep the shared overflow bucket outside the capped per-key map.
 		if l.overflow == nil {
@@ -87,7 +105,7 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	}
 	if b == nil {
 		b = &tokenBucket{tokens: l.capacity, lastSeen: now}
-		l.buckets[ip] = b
+		l.buckets[key] = b
 	} else {
 		elapsed := now.Sub(b.lastSeen).Seconds()
 		b.tokens += elapsed * l.refillRate
@@ -99,7 +117,7 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 
 	if b.tokens >= 1 {
 		b.tokens -= 1
-		return true, 0
+		return true, 0, b
 	}
 
 	// Not enough tokens: compute how long until one token is available.
@@ -108,7 +126,23 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	if wait < time.Second {
 		wait = time.Second
 	}
-	return false, wait
+	return false, wait, b
+}
+
+// refund credits exactly the bucket charge() charged. If that bucket was
+// evicted meanwhile, the credit is harmlessly lost. Middleware
+// uses it so a request denied by the /64 limit does not spend the /48 budget.
+func (l *loginLimiter) refund(b *tokenBucket) {
+	if b == nil {
+		return
+	}
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	b.tokens++
+	if b.tokens > l.capacity {
+		b.tokens = l.capacity
+	}
 }
 
 // evictStaleLocked removes buckets idle longer than ttl. Caller must hold l.mu.
@@ -171,11 +205,39 @@ func rateLimitKey(ip string) string {
 	return prefix.String()
 }
 
-// Middleware limits logins per IPv4 address or IPv6 /64. When the limit is
+// ipv6Prefix48Key groups native IPv6 clients by /48, excluding mapped IPv4.
+func ipv6Prefix48Key(ip string) (string, bool) {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return "", false
+	}
+	addr = addr.WithZone("").Unmap()
+	if !addr.Is6() {
+		return "", false
+	}
+	prefix, _ := addr.Prefix(48)
+	return prefix.String(), true
+}
+
+// Middleware limits logins per IPv4 address or IPv6 /64 and /48. When a limit is
 // exceeded it responds 429 with a Retry-After header instead of calling next.
 func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ok, retryAfter := l.allow(rateLimitKey(clientIP(r)))
+		ip := clientIP(r)
+		ok, retryAfter := true, time.Duration(0)
+		key48, isIPv6 := ipv6Prefix48Key(ip)
+		checkPrefix48 := isIPv6 && l.prefix48 != nil
+		var b48 *tokenBucket
+		if checkPrefix48 {
+			ok, retryAfter, b48 = l.prefix48.charge(key48)
+		}
+		if ok {
+			ok, retryAfter = l.allow(rateLimitKey(ip))
+			if !ok && checkPrefix48 {
+				// Denied /64 requests must not drain the shared /48 bucket.
+				l.prefix48.refund(b48)
+			}
+		}
 		if !ok {
 			secs := int(retryAfter.Seconds())
 			if secs < 1 {
