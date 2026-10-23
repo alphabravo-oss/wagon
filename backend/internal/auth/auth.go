@@ -1,10 +1,14 @@
 package auth
 
 import (
+	"crypto/pbkdf2"
 	"crypto/rand"
+	"crypto/sha256"
 	"crypto/subtle"
 	"database/sql"
 	"encoding/base64"
+	"encoding/hex"
+	"errors"
 	"fmt"
 	"log"
 	"net/http"
@@ -13,6 +17,8 @@ import (
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
 )
+
+var pbkdf2Iterations = 600000
 
 const (
 	sessionCookieName = "haulerci_session"
@@ -29,11 +35,69 @@ type Manager struct {
 
 // NewManager creates a new auth manager
 func NewManager(db *sql.DB, cfg *config.Config) *Manager {
-	return &Manager{
+	m := &Manager{
 		db:       db,
 		password: cfg.UIPassword,
 		enabled:  cfg.UIPassword != "",
 	}
+	if m.enabled {
+		if err := m.revokeSessionsOnPasswordChange(); err != nil {
+			log.Printf("Error checking UI password change: %v", err)
+		}
+	}
+	return m
+}
+
+func (m *Manager) revokeSessionsOnPasswordChange() error {
+	tx, err := m.db.Begin()
+	if err != nil {
+		return fmt.Errorf("beginning auth metadata transaction: %w", err)
+	}
+	defer func() { _ = tx.Rollback() }() // best effort; committed transactions are already closed
+
+	var saltHex string
+	err = tx.QueryRow(`SELECT v FROM auth_meta WHERE k = 'password_salt'`).Scan(&saltHex)
+	if errors.Is(err, sql.ErrNoRows) {
+		salt := make([]byte, 16)
+		if _, err := rand.Read(salt); err != nil {
+			return fmt.Errorf("generating password salt: %w", err)
+		}
+		saltHex = hex.EncodeToString(salt)
+		if _, err := tx.Exec(`INSERT INTO auth_meta (k, v) VALUES ('password_salt', ?)`, saltHex); err != nil {
+			return fmt.Errorf("storing password salt: %w", err)
+		}
+	} else if err != nil {
+		return fmt.Errorf("reading password salt: %w", err)
+	}
+	salt, err := hex.DecodeString(saltHex)
+	if err != nil || len(salt) != 16 {
+		return errors.New("invalid stored password salt")
+	}
+	fingerprint, err := pbkdf2.Key(sha256.New, m.password, salt, pbkdf2Iterations, sha256.Size)
+	if err != nil {
+		return fmt.Errorf("deriving password fingerprint: %w", err)
+	}
+	fingerprintHex := hex.EncodeToString(fingerprint)
+	var storedFingerprint string
+	err = tx.QueryRow(`SELECT v FROM auth_meta WHERE k = 'password_fp'`).Scan(&storedFingerprint)
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
+		return fmt.Errorf("reading password fingerprint: %w", err)
+	}
+	if err == nil && storedFingerprint == fingerprintHex {
+		return nil
+	}
+	if _, err := tx.Exec(`DELETE FROM sessions`); err != nil {
+		return fmt.Errorf("deleting sessions after UI password change: %w", err)
+	}
+	if _, err := tx.Exec(`INSERT INTO auth_meta (k, v) VALUES ('password_fp', ?)
+		ON CONFLICT(k) DO UPDATE SET v = excluded.v`, fingerprintHex); err != nil {
+		return fmt.Errorf("storing password fingerprint: %w", err)
+	}
+	if err := tx.Commit(); err != nil {
+		return fmt.Errorf("committing auth metadata: %w", err)
+	}
+	log.Print("UI sessions revoked because the UI password changed or was first configured")
+	return nil
 }
 
 // IsEnabled returns whether authentication is enabled

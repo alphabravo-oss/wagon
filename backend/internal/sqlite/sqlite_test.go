@@ -28,12 +28,12 @@ func TestMigrationsApplyOnEmptyDB(t *testing.T) {
 	if err := db.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("Failed to query schema_migrations: %v", err)
 	}
-	if migrationCount != 7 {
-		t.Errorf("Expected 7 migrations, got %d", migrationCount)
+	if migrationCount != 8 {
+		t.Errorf("Expected 8 migrations, got %d", migrationCount)
 	}
 
 	// Verify all tables exist
-	tables := []string{"settings", "jobs", "job_logs", "saved_manifests", "serve_processes", "sessions", "hauls", "store_contents"}
+	tables := []string{"settings", "jobs", "job_logs", "saved_manifests", "serve_processes", "sessions", "auth_meta", "hauls", "store_contents"}
 	for _, table := range tables {
 		var count int
 		if err := db.QueryRow("SELECT COUNT(*) FROM sqlite_master WHERE type='table' AND name=?", table).Scan(&count); err != nil {
@@ -75,8 +75,8 @@ func TestMigrationsIdempotent(t *testing.T) {
 	if err := db2.QueryRow("SELECT COUNT(*) FROM schema_migrations").Scan(&migrationCount); err != nil {
 		t.Fatalf("Failed to query schema_migrations: %v", err)
 	}
-	if migrationCount != 7 {
-		t.Errorf("Expected 7 migrations after reopen, got %d", migrationCount)
+	if migrationCount != 8 {
+		t.Errorf("Expected 8 migrations after reopen, got %d", migrationCount)
 	}
 }
 
