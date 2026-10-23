@@ -1,15 +1,5 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-
-// === Context for Auth ===
-const AuthContext = createContext()
-
-export function useAuth() {
-  const context = useContext(AuthContext)
-  if (!context) {
-    throw new Error('useAuth must be used within AuthProvider')
-  }
-  return context
-}
+import { useState, useEffect, useCallback } from 'react'
+import { AuthContext } from './useAuth.js'
 
 export function AuthProvider({ children }) {
   const [isAuthenticated, setIsAuthenticated] = useState(false)

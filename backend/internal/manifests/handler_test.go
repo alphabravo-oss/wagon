@@ -25,7 +25,11 @@ func setup(t *testing.T) (*Handler, *hauls.Service, http.Handler) {
 	if err != nil {
 		t.Fatalf("open db: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
 
 	cfg := &config.Config{DataDir: filepath.Join(dir, "data")}
 	haulSvc := hauls.NewService(db.DB, cfg)

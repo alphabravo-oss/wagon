@@ -18,14 +18,14 @@ type Setting struct {
 
 // SettingsResponse represents the response for settings API
 type SettingsResponse struct {
-	Settings          map[string]Setting `json:"settings"`
-	LogLevel          string             `json:"logLevel"`
-	Retries           string             `json:"retries"`
-	IgnoreErrors      string             `json:"ignoreErrors"`
-	DefaultPlatform   string             `json:"defaultPlatform"`
-	DefaultKeyPath    string             `json:"defaultKeyPath"`
-	TempDir           string             `json:"tempDir"`
-	EnvHelp           map[string]string  `json:"envHelp"`
+	Settings        map[string]Setting `json:"settings"`
+	LogLevel        string             `json:"logLevel"`
+	Retries         string             `json:"retries"`
+	IgnoreErrors    string             `json:"ignoreErrors"`
+	DefaultPlatform string             `json:"defaultPlatform"`
+	DefaultKeyPath  string             `json:"defaultKeyPath"`
+	TempDir         string             `json:"tempDir"`
+	EnvHelp         map[string]string  `json:"envHelp"`
 }
 
 // Handler handles HTTP requests for settings operations
@@ -54,7 +54,7 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to query settings", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	settingsMap := make(map[string]Setting)
 	for rows.Next() {
@@ -70,12 +70,12 @@ func (h *Handler) GetSettings(w http.ResponseWriter, r *http.Request) {
 	response := SettingsResponse{
 		Settings: settingsMap,
 		EnvHelp: map[string]string{
-			"log_level":         "HAULER_LOG_LEVEL",
-			"retries":           "HAULER_RETRIES",
-			"ignore_errors":     "HAULER_IGNORE_ERRORS",
-			"default_platform":  "HAULER_DEFAULT_PLATFORM",
-			"default_key_path":  "HAULER_KEY_PATH",
-			"temp_dir":          "HAULER_TEMP_DIR",
+			"log_level":        "HAULER_LOG_LEVEL",
+			"retries":          "HAULER_RETRIES",
+			"ignore_errors":    "HAULER_IGNORE_ERRORS",
+			"default_platform": "HAULER_DEFAULT_PLATFORM",
+			"default_key_path": "HAULER_KEY_PATH",
+			"temp_dir":         "HAULER_TEMP_DIR",
 		},
 	}
 

@@ -73,7 +73,7 @@ func applyMigrations(db *sql.DB) error {
 	if err != nil {
 		return fmt.Errorf("querying applied migrations: %w", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	applied := make(map[int]bool)
 	for rows.Next() {
@@ -123,13 +123,13 @@ func applyMigrations(db *sql.DB) error {
 
 		// Execute migration
 		if _, err := tx.Exec(string(content)); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback() // best effort; the original error is returned
 			return fmt.Errorf("executing migration %d: %w", version, err)
 		}
 
 		// Record migration
 		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
-			tx.Rollback()
+			_ = tx.Rollback() // best effort; the original error is returned
 			return fmt.Errorf("recording migration %d: %w", version, err)
 		}
 
@@ -150,6 +150,8 @@ func parseVersion(filename string) int {
 		return 0
 	}
 	var version int
-	fmt.Sscanf(parts[0], "%d", &version)
+	if _, err := fmt.Sscanf(parts[0], "%d", &version); err != nil {
+		return 0
+	}
 	return version
 }

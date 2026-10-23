@@ -1,5 +1,5 @@
 import { useNavigate } from 'react-router-dom'
-import { useAuth } from '../contexts/AuthContext.jsx'
+import { useAuth } from '../contexts/useAuth.js'
 import Brand from './Brand.jsx'
 import HaulSwitcher from './HaulSwitcher.jsx'
 import JobIndicator from './JobIndicator.jsx'

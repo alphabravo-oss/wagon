@@ -1,14 +1,5 @@
-import { createContext, useContext, useState, useCallback } from 'react'
-
-const ModalContext = createContext()
-
-export const useModal = () => {
-  const context = useContext(ModalContext)
-  if (!context) {
-    throw new Error('useModal must be used within ModalProvider')
-  }
-  return context
-}
+import { useState, useCallback } from 'react'
+import { ModalContext } from './useModal.js'
 
 export function ModalProvider({ children }) {
   const [modals, setModals] = useState([])
