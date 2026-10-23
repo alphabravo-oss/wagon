@@ -266,6 +266,49 @@ func (m *Manager) startAndWait(ctx context.Context, haulID int64, hostname strin
 	return p, nil
 }
 
+// loopbackRegistryConfig renders a distribution registry config that is
+// equivalent to hauler's built-in default but binds the HTTP listener to
+// loopback only. hauler 1.3.2's "store serve registry" has no bind-address flag
+// and builds its config in code binding ":<port>" (all interfaces); passing
+// --config overrides that so the internal registry is reachable only via the
+// authenticated proxy on 127.0.0.1.
+func loopbackRegistryConfig(registryDir string, port int) string {
+	return fmt.Sprintf(`version: 0.1
+log:
+  level: info
+storage:
+  cache:
+    blobdescriptor: inmemory
+  filesystem:
+    rootdirectory: %q
+  maintenance:
+    readonly:
+      enabled: true
+http:
+  addr: 127.0.0.1:%d
+  headers:
+    X-Content-Type-Options: [nosniff]
+validation:
+  manifests:
+    urls:
+      allow:
+      - .+
+`, registryDir, port)
+}
+
+// writeRegistryConfig writes a loopback-only registry config file for a haul and
+// returns its path.
+func (m *Manager) writeRegistryConfig(haulID int64, registryDir string, port int) (string, error) {
+	if err := os.MkdirAll(registryDir, 0o755); err != nil {
+		return "", err
+	}
+	path := filepath.Join(registryDir, "registry-config.yaml")
+	if err := os.WriteFile(path, []byte(loopbackRegistryConfig(registryDir, port)), 0o600); err != nil {
+		return "", err
+	}
+	return path, nil
+}
+
 // startRegistry launches one internal registry process for a haul and begins
 // monitoring it. The haul must already be recorded in m.desired.
 func (m *Manager) startRegistry(haul *hauls.Haul, hostname string) (*published, error) {
@@ -275,12 +318,20 @@ func (m *Manager) startRegistry(haul *hauls.Haul, hostname string) (*published, 
 	}
 
 	registryDir := filepath.Join(filepath.Dir(haul.StoreDir), "registry")
+	// Bind the internal registry to loopback only via a config file: the child
+	// must be reachable solely through the authenticated proxy, never directly
+	// on a public interface.
+	configPath, err := m.writeRegistryConfig(haul.ID, registryDir, port)
+	if err != nil {
+		return nil, fmt.Errorf("writing registry config: %w", err)
+	}
 	args := []string{
 		"store", "serve", "registry",
 		"--readonly",
 		"--port", fmt.Sprintf("%d", port),
 		"--store", haul.StoreDir,
 		"--directory", registryDir,
+		"--config", configPath,
 	}
 	cmd := exec.Command("hauler", args...)
 	cmd.Dir = m.cfg.DataDir
