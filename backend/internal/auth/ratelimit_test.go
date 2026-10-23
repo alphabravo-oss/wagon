@@ -147,23 +147,59 @@ func TestLimiterRefund(t *testing.T) {
 		buckets:  map[string]*tokenBucket{"known": {tokens: 4.5}},
 		capacity: 5,
 	}
-	l.refund("unknown")
+	l.refund(nil)
 	if len(l.buckets) != 1 || l.overflow != nil {
-		t.Fatal("refund of an unknown key should not create a bucket")
+		t.Fatal("refund of nil should not create a bucket")
 	}
 	l.overflow = &tokenBucket{tokens: 2}
-	l.refund("known")
+	l.refund(l.buckets["known"])
 	if l.buckets["known"].tokens != 5 || l.overflow.tokens != 2 {
 		t.Fatal("refund should cap the existing bucket at capacity and leave overflow unchanged")
 	}
-	l.refund("unknown")
+	l.refund(l.overflow)
 	if l.overflow.tokens != 3 || len(l.buckets) != 1 {
-		t.Fatal("refund of an absent key should restore one overflow token without creating a bucket")
+		t.Fatal("refund should restore one overflow token without creating a bucket")
 	}
 	l.overflow.tokens = 5
-	l.refund("unknown")
+	l.refund(l.overflow)
 	if l.overflow.tokens != 5 {
 		t.Fatal("overflow refund should be capped at capacity")
+	}
+}
+
+func TestLimiterRefundCreditsChargedOverflowBucket(t *testing.T) {
+	l := &loginLimiter{
+		buckets:    make(map[string]*tokenBucket),
+		capacity:   5,
+		refillRate: 0,
+		ttl:        10 * time.Minute,
+	}
+	now := time.Now()
+	for i := 0; i < maxLoginBuckets; i++ {
+		l.buckets[strconv.Itoa(i)] = &tokenBucket{tokens: 5, lastSeen: now}
+	}
+	ok, _, b := l.charge("new-key")
+	if !ok || b == nil || b != l.overflow || b.tokens != 4 {
+		t.Fatalf("charge: ok=%v, bucket=%+v, overflow=%p; want overflow with 4 tokens", ok, b, l.overflow)
+	}
+	if _, exists := l.buckets["new-key"]; exists {
+		t.Fatal("charge at capacity should not create a map entry")
+	}
+	// A slot frees up and a concurrent request for the same key gets its own
+	// bucket before the refund runs: the refund must still credit the overflow
+	// bucket that was charged, not the new private bucket for that key.
+	delete(l.buckets, "0")
+	private := &tokenBucket{tokens: 3, lastSeen: now}
+	l.buckets["new-key"] = private
+	l.refund(b)
+	if l.overflow.tokens != 5 {
+		t.Fatalf("overflow tokens = %v, want 5", l.overflow.tokens)
+	}
+	if private.tokens != 3 {
+		t.Fatalf("private bucket tokens = %v, want 3 (refund went to the wrong bucket)", private.tokens)
+	}
+	if len(l.buckets) != maxLoginBuckets {
+		t.Fatalf("bucket count = %d, want %d (refund must not create entries)", len(l.buckets), maxLoginBuckets)
 	}
 }
 
