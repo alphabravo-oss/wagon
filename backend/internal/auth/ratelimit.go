@@ -3,6 +3,7 @@ package auth
 import (
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"strconv"
 	"strings"
@@ -10,16 +11,20 @@ import (
 	"time"
 )
 
-// loginLimiter is a small per-client-IP rate limiter built on the standard
-// library only. It uses a token-bucket per IP: each bucket refills at a steady
+const maxLoginBuckets = 10000
+
+// loginLimiter is a small rate limiter built on the standard library only.
+// Keys are per IPv4 address or per IPv6 /64: each bucket refills at a steady
 // rate and starts with a small burst so a legitimate user who fat-fingers their
 // password a couple of times is not blocked, while a brute-force loop is.
 //
 // It is intended to guard the login endpoint only. Do NOT wrap registry or
 // content endpoints with it — that would throttle legitimate pulls.
 type loginLimiter struct {
-	mu      sync.Mutex
-	buckets map[string]*tokenBucket
+	mu        sync.Mutex
+	buckets   map[string]*tokenBucket
+	overflow  *tokenBucket
+	lastEvict time.Time
 
 	// refillRate is tokens added per second.
 	refillRate float64
@@ -34,7 +39,8 @@ type tokenBucket struct {
 	lastSeen time.Time
 }
 
-// loginRatePerMinute reads HAULER_UI_LOGIN_RATE (attempts per minute per IP).
+// loginRatePerMinute reads HAULER_UI_LOGIN_RATE (attempts per minute per key).
+// Keys are per IPv4 address or per IPv6 /64.
 // Defaults to 5, and clamps to at least 1 so the endpoint never fully locks out.
 func loginRatePerMinute() int {
 	if v := os.Getenv("HAULER_UI_LOGIN_RATE"); v != "" {
@@ -46,7 +52,7 @@ func loginRatePerMinute() int {
 }
 
 // newLoginLimiter constructs a limiter allowing ~ratePerMinute attempts per
-// minute per IP, with a small burst equal to the per-minute rate.
+// minute per IPv4 address or IPv6 /64, with a burst equal to the per-minute rate.
 func newLoginLimiter() *loginLimiter {
 	rpm := loginRatePerMinute()
 	return &loginLimiter{
@@ -57,7 +63,7 @@ func newLoginLimiter() *loginLimiter {
 	}
 }
 
-// allow reports whether a request from ip may proceed, and if not, how long the
+// allow reports whether a request for the given key may proceed, and how long the
 // caller should wait before retrying. It refills the bucket based on elapsed
 // time, consumes one token on success, and opportunistically evicts stale
 // entries so the map cannot grow unbounded.
@@ -67,9 +73,18 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 
-	l.evictStaleLocked(now)
+	if now.Sub(l.lastEvict) >= time.Minute || (l.buckets[ip] == nil && len(l.buckets) >= maxLoginBuckets) {
+		l.evictStaleLocked(now)
+	}
 
 	b := l.buckets[ip]
+	if b == nil && len(l.buckets) >= maxLoginBuckets {
+		// Keep the shared overflow bucket outside the capped per-key map.
+		if l.overflow == nil {
+			l.overflow = &tokenBucket{tokens: l.capacity, lastSeen: now}
+		}
+		b = l.overflow
+	}
 	if b == nil {
 		b = &tokenBucket{tokens: l.capacity, lastSeen: now}
 		l.buckets[ip] = b
@@ -98,6 +113,7 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 
 // evictStaleLocked removes buckets idle longer than ttl. Caller must hold l.mu.
 func (l *loginLimiter) evictStaleLocked(now time.Time) {
+	l.lastEvict = now
 	for ip, b := range l.buckets {
 		if now.Sub(b.lastSeen) > l.ttl {
 			delete(l.buckets, ip)
@@ -116,7 +132,7 @@ func trustProxy() bool {
 	return false
 }
 
-// clientIP determines the rate-limit key for a request.
+// clientIP determines the client address for a request.
 //
 // By default it uses RemoteAddr (the real TCP peer), which a client cannot
 // spoof. Only when HAULER_UI_TRUST_PROXY is set do we honor X-Forwarded-For, and
@@ -141,12 +157,25 @@ func clientIP(r *http.Request) string {
 	return host
 }
 
-// Middleware wraps next with per-IP login rate limiting. When the limit is
+// rateLimitKey keys clients by IPv4 address or IPv6 /64.
+func rateLimitKey(ip string) string {
+	addr, err := netip.ParseAddr(ip)
+	if err != nil {
+		return ip
+	}
+	addr = addr.WithZone("").Unmap()
+	if addr.Is4() {
+		return addr.String()
+	}
+	prefix, _ := addr.Prefix(64)
+	return prefix.String()
+}
+
+// Middleware limits logins per IPv4 address or IPv6 /64. When the limit is
 // exceeded it responds 429 with a Retry-After header instead of calling next.
 func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		ip := clientIP(r)
-		ok, retryAfter := l.allow(ip)
+		ok, retryAfter := l.allow(rateLimitKey(clientIP(r)))
 		if !ok {
 			secs := int(retryAfter.Seconds())
 			if secs < 1 {
