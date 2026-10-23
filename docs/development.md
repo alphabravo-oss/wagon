@@ -169,7 +169,7 @@ Development configuration can be set via environment variables:
 | `HAULER_DIR` | `./data` | Hauler working directory |
 | `HAULER_STORE_DIR` | `./data/store` | Store directory path |
 | `HAULER_TEMP_DIR` | `./data/tmp` | Temporary files directory |
-| `HAULER_UI_PASSWORD` | (none) | Optional UI password |
+| `HAULER_UI_PASSWORD` | (none) | Required UI password (or `HAULER_UI_INSECURE_NO_AUTH=true` for throwaway local dev only) |
 
 For local development, create a `.env` file in the backend directory:
 
@@ -186,9 +186,8 @@ HAULER_DIR=./data
 - `POST /api/login` — UI authentication (if password set)
 - `POST /api/logout` — Clear session
 
-### Authenticated Routes (if password set)
-- `GET /api/jobs` — List jobs
-- `POST /api/jobs` — Create job
+### Authenticated Routes
+- `GET /api/jobs` — List jobs (jobs are created by the typed store/registry endpoints)
 - `GET /api/jobs/:id/stream` — SSE job logs
 - `DELETE /api/jobs/:id` — Delete job
 - `POST /api/registry/login` — Registry login

@@ -421,6 +421,8 @@ function ArchivesTab({ haul, onChanged }) {
     })
     xhr.addEventListener('error', () => { setUploading(false); setError('Network error during upload') })
     xhr.open('POST', '/api/store/import')
+    // Required by the server for multipart uploads (cross-site forms cannot set it).
+    xhr.setRequestHeader('X-Requested-With', 'XMLHttpRequest')
     xhr.send(formData)
   }
 
