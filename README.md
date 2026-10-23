@@ -69,8 +69,8 @@ By default Wagon is only reachable from the machine it runs on. See
 
 ### Prerequisites
 
-- **Go** 1.24+
-- **Node.js** 20+
+- **Go** 1.26.0+ (toolchain 1.26.10)
+- **Node.js** 22+
 - **Make** (optional, for convenience commands)
 
 ### Project Structure
@@ -274,7 +274,8 @@ docker push your-registry/wagon:latest
 
 ### Frontend (React)
 
-- **React 19.1** — Modern React with hooks
+- **React 19.3** — Modern React with hooks
+- **JavaScript (JSX)** — No TypeScript or typecheck step; `vite-env.d.ts` is only a Vite type stub
 - **Vite 8** — Fast build tool and dev server
 - **React Router 7** — Client-side routing
 - **Monaco Editor** — VS Code editor for manifests
