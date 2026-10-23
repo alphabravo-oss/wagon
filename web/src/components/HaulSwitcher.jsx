@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { ChevronDown, Layers } from 'lucide-react'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
 
 function HaulSwitcher() {
   const { hauls, activeHaul, setActiveHaulId } = useHauls()

@@ -1,6 +1,6 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Package, Folder } from 'lucide-react'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
 
 function Serve() {
   const { activeHaul } = useHauls()

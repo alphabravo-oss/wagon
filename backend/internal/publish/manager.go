@@ -172,7 +172,7 @@ func freePort() (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	defer l.Close()
+	defer func() { _ = l.Close() }() // probe listener; no connections to drain
 	return l.Addr().(*net.TCPAddr).Port, nil
 }
 
@@ -664,7 +664,12 @@ func (m *Manager) RestoreOnBoot(ctx context.Context) {
 			wants = append(wants, wnt)
 		}
 	}
-	rows.Close()
+	if err := rows.Err(); err != nil {
+		log.Printf("publish restore: reading rows failed: %v", err)
+	}
+	if err := rows.Close(); err != nil {
+		log.Printf("publish restore: closing rows failed: %v", err)
+	}
 
 	restored := 0
 	for _, wnt := range wants {

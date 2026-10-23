@@ -1,7 +1,7 @@
 import { useState } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Inbox } from 'lucide-react'
-import { useJobs } from '../contexts/JobsContext.jsx'
+import { useJobs } from '../contexts/useJobs.js'
 import StatusBadge from '../components/StatusBadge.jsx'
 
 function JobHistory() {

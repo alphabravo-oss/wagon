@@ -1,6 +1,6 @@
 import { useState } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
 import { Package, Plus, Trash2, FolderOpen, Check, Star, Edit2, Image, BarChart3, FileText, FileArchive } from 'lucide-react'
 
 function formatSize(bytes) {

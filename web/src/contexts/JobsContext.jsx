@@ -1,15 +1,5 @@
-import { createContext, useContext, useState, useEffect, useCallback } from 'react'
-
-// === Context for Jobs ===
-const JobsContext = createContext()
-
-export function useJobs() {
-  const context = useContext(JobsContext)
-  if (!context) {
-    throw new Error('useJobs must be used within JobsProvider')
-  }
-  return context
-}
+import { useState, useEffect, useCallback } from 'react'
+import { JobsContext } from './useJobs.js'
 
 export function JobsProvider({ children }) {
   const [jobs, setJobs] = useState([])

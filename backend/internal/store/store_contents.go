@@ -102,7 +102,7 @@ func (h *Handler) GetInfo(w http.ResponseWriter, r *http.Request) {
 	db := h.JobRunner.DB()
 	rows, err := db.QueryContext(ctx, `SELECT name, digest, source_haul FROM store_contents WHERE haul_id = ?`, haul.ID)
 	if err == nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }() // read-only query; nothing to flush
 		for rows.Next() {
 			var s SourceInfo
 			var digest sql.NullString

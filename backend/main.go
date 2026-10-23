@@ -131,7 +131,11 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			log.Printf("Failed to close database: %v", err)
+		}
+	}()
 	log.Printf("Database initialized: %s", cfg.DatabasePath)
 
 	// Reset state left over from a previous run before anything starts.

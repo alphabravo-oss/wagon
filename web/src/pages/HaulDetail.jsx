@@ -1,7 +1,7 @@
 import { useState, useEffect, useRef, useCallback } from 'react'
 import { useParams, useNavigate, NavLink } from 'react-router-dom'
-import { useHauls } from '../contexts/HaulContext.jsx'
-import { useJobs } from '../contexts/JobsContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
+import { useJobs } from '../contexts/useJobs.js'
 import StoreContents from './StoreContents.jsx'
 import {
   Package, Image, BarChart3, FileText, RefreshCw, Save, Download, Upload,

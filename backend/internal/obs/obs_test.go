@@ -1,6 +1,7 @@
 package obs
 
 import (
+	"fmt"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -55,6 +56,93 @@ func TestMetricsExposition(t *testing.T) {
 		if !strings.Contains(body, want) {
 			t.Errorf("metrics output missing %q\n---\n%s", want, body)
 		}
+	}
+}
+
+func TestObserveNormalizesMethods(t *testing.T) {
+	resetMetrics(t)
+	for i := 0; i < 50; i++ {
+		observe(fmt.Sprintf("CUSTOM%d", i), 200, time.Second)
+	}
+	methods := []string{"GET", "HEAD", "POST", "PUT", "PATCH", "DELETE", "CONNECT", "OPTIONS", "TRACE"}
+	for _, method := range methods {
+		observe(method, 200, time.Second)
+	}
+
+	rr := httptest.NewRecorder()
+	MetricsHandler().ServeHTTP(rr, httptest.NewRequest("GET", "/metrics", nil))
+	body := rr.Body.String()
+	for _, metric := range []string{
+		"haulerui_http_requests_total",
+		"haulerui_http_request_duration_seconds_sum",
+		"haulerui_http_request_duration_seconds_count",
+	} {
+		labels := `method="other"`
+		if metric == "haulerui_http_requests_total" {
+			labels += `,code="200"`
+		}
+		want := fmt.Sprintf("%s{%s} 50\n", metric, labels)
+		if strings.Count(body, want) != 1 {
+			t.Errorf("expected exactly one %q series in:\n%s", want, body)
+		}
+		for _, method := range methods {
+			want := strings.Replace(want, `method="other"`, fmt.Sprintf("method=%q", method), 1)
+			want = strings.Replace(want, " 50\n", " 1\n", 1)
+			if !strings.Contains(body, want) {
+				t.Errorf("metrics output missing %q", want)
+			}
+		}
+	}
+	registry.mu.Lock()
+	defer registry.mu.Unlock()
+	if len(registry.reqTotal) != 10 || len(registry.durSum) != 10 || len(registry.durCount) != 10 {
+		t.Errorf("unexpected map sizes: requests=%d sums=%d counts=%d", len(registry.reqTotal), len(registry.durSum), len(registry.durCount))
+	}
+}
+
+type blockingResponseWriter struct {
+	http.ResponseWriter
+	started chan struct{}
+	unblock chan struct{}
+}
+
+func (w *blockingResponseWriter) Write(p []byte) (int, error) {
+	select {
+	case <-w.started:
+	default:
+		close(w.started)
+	}
+	<-w.unblock
+	return w.ResponseWriter.Write(p)
+}
+
+func TestMetricsWriteDoesNotBlockObserve(t *testing.T) {
+	resetMetrics(t)
+	w := &blockingResponseWriter{
+		ResponseWriter: httptest.NewRecorder(),
+		started:        make(chan struct{}),
+		unblock:        make(chan struct{}),
+	}
+	served := make(chan struct{})
+	observed := make(chan struct{})
+	defer func() {
+		close(w.unblock)
+		<-served
+		<-observed
+	}()
+	go func() {
+		MetricsHandler().ServeHTTP(w, httptest.NewRequest("GET", "/metrics", nil))
+		close(served)
+	}()
+	go func() {
+		<-w.started
+		observe("GET", 200, time.Second)
+		close(observed)
+	}()
+	select {
+	case <-observed:
+	case <-time.After(2 * time.Second):
+		t.Fatal("observe blocked while metrics response was being written")
 	}
 }
 

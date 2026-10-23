@@ -68,7 +68,11 @@ func TestStreamNoWildcardCORSAndRedacted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("stream request: %v", err)
 	}
-	defer resp.Body.Close()
+	defer func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close response body: %v", err)
+		}
+	}()
 
 	if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 		t.Errorf("Access-Control-Allow-Origin = %q, want none", got)

@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate, NavLink } from 'react-router-dom'
-import { useJobs } from '../contexts/JobsContext.jsx'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useJobs } from '../contexts/useJobs.js'
+import { useHauls } from '../contexts/useHauls.js'
 
 function StoreAddChart() {
   const { fetchJobs } = useJobs()

@@ -25,7 +25,11 @@ func newTestServer(t *testing.T) (*httptest.Server, *auth.Manager, *jobrunner.Ru
 	if err != nil {
 		t.Fatalf("sqlite.Open: %v", err)
 	}
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close database: %v", err)
+		}
+	})
 
 	cfg := &config.Config{DataDir: dir, UIPassword: "test-password"}
 	runner := jobrunner.New(db.DB, dir)
@@ -52,7 +56,11 @@ func do(t *testing.T, method, url, body string, hdr map[string]string) *http.Res
 	if err != nil {
 		t.Fatalf("%s %s: %v", method, url, err)
 	}
-	t.Cleanup(func() { resp.Body.Close() })
+	t.Cleanup(func() {
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close response body: %v", err)
+		}
+	})
 	return resp
 }
 
@@ -137,7 +145,9 @@ func TestNoWildcardCORS(t *testing.T) {
 		if got := resp.Header.Get("Access-Control-Allow-Origin"); got != "" {
 			t.Errorf("%s %s: Access-Control-Allow-Origin = %q, want none", tc.method, tc.path, got)
 		}
-		resp.Body.Close()
+		if err := resp.Body.Close(); err != nil {
+			t.Logf("close response body: %v", err)
+		}
 		cancel()
 	}
 }

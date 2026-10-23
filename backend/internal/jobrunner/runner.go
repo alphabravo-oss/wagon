@@ -203,21 +203,67 @@ func (r *Runner) monitorCompletion(ctx context.Context, jobID int64, cmd *exec.C
 	_ = r.updateStatus(ctx, jobID, status, nil, &completedAt, exitCode)
 }
 
+const maxLogLineBytes = 64 * 1024
+
 // streamOutput reads from a pipe and writes to the database
 func (r *Runner) streamOutput(ctx context.Context, jobID int64, reader io.Reader, streamName string) {
-	scanner := bufio.NewScanner(reader)
-	for scanner.Scan() {
-		line := scanner.Text()
-		// Redact sensitive information before storing
-		redactedLine := redactSensitive(line)
-		if err := r.appendLog(ctx, jobID, streamName, redactedLine); err != nil {
-			// Log error but continue scanning
-			fmt.Printf("Error appending log: %v\n", err)
+	buffered := bufio.NewReader(reader)
+	line := make([]byte, 0, maxLogLineBytes)
+	var lineBytes int64
+	var lastByte byte
+	for {
+		fragment, err := buffered.ReadSlice('\n')
+		if err == nil {
+			fragment = fragment[:len(fragment)-1]
 		}
+		if len(fragment) > 0 {
+			lastByte = fragment[len(fragment)-1]
+			lineBytes += int64(len(fragment))
+			line = append(line, fragment[:min(len(fragment), maxLogLineBytes-len(line))]...)
+		}
+		if err == bufio.ErrBufferFull {
+			continue
+		}
+		if lineBytes > 0 || err == nil {
+			// Match ScanLines, including a CR split from the newline across reads.
+			if lastByte == '\r' && lineBytes > 0 {
+				lineBytes--
+				if int64(len(line)) > lineBytes {
+					line = line[:len(line)-1]
+				}
+			}
+			redactedLine := redactSensitive(string(line))
+			if discarded := lineBytes - int64(len(line)); discarded > 0 {
+				redactedLine = redactTruncatedTail(redactedLine)
+				redactedLine += fmt.Sprintf(" [truncated %d bytes]", discarded)
+			}
+			if logErr := r.appendLog(ctx, jobID, streamName, redactedLine); logErr != nil {
+				// Log error but continue draining.
+				fmt.Printf("Error appending log: %v\n", logErr)
+			}
+		}
+		if err != nil {
+			if err != io.EOF {
+				_ = r.appendLog(ctx, jobID, streamName, fmt.Sprintf("[stream error: %v]", err))
+			}
+			return
+		}
+		line = line[:0]
+		lineBytes = 0
 	}
-	if err := scanner.Err(); err != nil {
-		_ = r.appendLog(ctx, jobID, streamName, fmt.Sprintf("[stream error: %v]", err))
-	}
+}
+
+var (
+	truncatedURLPassword = regexp.MustCompile(`://[^:/]+:[^@]*$`)
+	truncatedURLUsername = regexp.MustCompile(`://[^:/@\s]+$`)
+	truncatedDockerAuth  = regexp.MustCompile(`("auth":\s*")[^"]*$`)
+)
+
+// redactTruncatedTail covers credentials whose terminator was discarded by truncation.
+func redactTruncatedTail(line string) string {
+	line = truncatedURLPassword.ReplaceAllString(line, "://[REDACTED]:")
+	line = truncatedURLUsername.ReplaceAllString(line, "://[REDACTED]")
+	return truncatedDockerAuth.ReplaceAllString(line, "${1}[REDACTED]")
 }
 
 // redactSensitive redacts potential sensitive information from log lines

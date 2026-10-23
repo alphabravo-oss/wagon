@@ -1,7 +1,7 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import { Image, BarChart3, FileText, RefreshCw, Search, Package, Folder, FileText as FileIcon } from 'lucide-react'
-import { useHauls } from '../contexts/HaulContext.jsx'
+import { useHauls } from '../contexts/useHauls.js'
 
 function StoreContents() {
   const { activeHaul } = useHauls()
