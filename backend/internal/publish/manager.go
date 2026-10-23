@@ -18,6 +18,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httputil"
+	"net/textproto"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -73,10 +74,10 @@ func NewManager(cfg *config.Config, db *sql.DB, haulSvc *hauls.Service) *Manager
 		starting:    make(map[int64]chan struct{}),
 		idleTimeout: registryIdleTimeout(),
 	}
-	// Single reverse proxy whose Director resolves the target per request from
+	// Single reverse proxy whose Rewrite resolves the target per request from
 	// the incoming Host header.
 	m.proxy = &httputil.ReverseProxy{
-		Director:      m.director,
+		Rewrite:       m.rewrite,
 		FlushInterval: 250 * time.Millisecond, // stream blobs, don't buffer
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			log.Printf("registry proxy error for host %q: %v", r.Host, err)
@@ -93,11 +94,47 @@ type ctxKey string
 
 const targetKey ctxKey = "publishTarget"
 
-// director rewrites a proxied request to the internal registry resolved from Host.
-func (m *Manager) director(r *http.Request) {
-	if target, ok := r.Context().Value(targetKey).(string); ok {
-		r.URL.Scheme = "http"
-		r.URL.Host = target
+// rewrite points a proxied request at the internal registry resolved from Host.
+//
+// It reproduces the forwarding of the former Director-based proxy exactly:
+// the Host header, path and raw query are passed through unchanged, client-sent
+// Forwarded / X-Forwarded-* headers are kept (unless the client listed them in
+// Connection, which made them hop-by-hop), and the client IP is appended to
+// X-Forwarded-For.
+func (m *Manager) rewrite(pr *httputil.ProxyRequest) {
+	hop := map[string]bool{}
+	for _, v := range pr.In.Header["Connection"] {
+		for _, f := range strings.Split(v, ",") {
+			if f = textproto.TrimString(f); f != "" {
+				hop[http.CanonicalHeaderKey(f)] = true
+			}
+		}
+	}
+	// ReverseProxy strips these before calling Rewrite; Director kept them.
+	for _, h := range []string{"Forwarded", "X-Forwarded-For", "X-Forwarded-Host", "X-Forwarded-Proto"} {
+		if v, ok := pr.In.Header[h]; ok && !hop[h] {
+			pr.Out.Header[h] = v
+		}
+	}
+	// Director mode only dropped unparsable query parameters when the form had
+	// been parsed; Rewrite mode always does. Keep the raw query otherwise.
+	if pr.In.Form == nil {
+		pr.Out.URL.RawQuery = pr.In.URL.RawQuery
+	}
+	// Same X-Forwarded-For handling ReverseProxy applies in Director mode.
+	if clientIP, _, err := net.SplitHostPort(pr.In.RemoteAddr); err == nil {
+		prior, ok := pr.Out.Header["X-Forwarded-For"]
+		omit := ok && prior == nil
+		if len(prior) > 0 {
+			clientIP = strings.Join(prior, ", ") + ", " + clientIP
+		}
+		if !omit {
+			pr.Out.Header.Set("X-Forwarded-For", clientIP)
+		}
+	}
+	if target, ok := pr.In.Context().Value(targetKey).(string); ok {
+		pr.Out.URL.Scheme = "http"
+		pr.Out.URL.Host = target
 	}
 }
 
