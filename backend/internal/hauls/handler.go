@@ -224,7 +224,7 @@ func (h *Handler) handleArchiveFile(w http.ResponseWriter, r *http.Request, id i
 			http.Error(w, "Error opening file", http.StatusInternalServerError)
 			return
 		}
-		defer f.Close()
+		defer func() { _ = f.Close() }() // read-only, nothing to flush
 		w.Header().Set("Content-Disposition", fmt.Sprintf("attachment; filename=%q", filename))
 		w.Header().Set("Content-Type", "application/octet-stream")
 		w.Header().Set("Content-Length", strconv.FormatInt(info.Size(), 10))
@@ -243,7 +243,7 @@ func (h *Handler) summarize(r *http.Request, haul *Haul) Summary {
 	rows, err := h.svc.db.QueryContext(r.Context(),
 		`SELECT content_type, COUNT(1) FROM store_contents WHERE haul_id = ? GROUP BY content_type`, haul.ID)
 	if err == nil {
-		defer rows.Close()
+		defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 		for rows.Next() {
 			var ct string
 			var count int

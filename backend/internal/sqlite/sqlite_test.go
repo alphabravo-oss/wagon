@@ -17,7 +17,11 @@ func TestMigrationsApplyOnEmptyDB(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Verify schema_migrations table exists and has our migration
 	var migrationCount int
@@ -51,14 +55,20 @@ func TestMigrationsIdempotent(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database first time: %v", err)
 	}
-	db1.Close()
+	if err := db1.Close(); err != nil {
+		t.Fatalf("close db1: %v", err)
+	}
 
 	// Open database second time (should re-apply migrations without error)
 	db2, err := Open(dbPath)
 	if err != nil {
 		t.Fatalf("Failed to open database second time: %v", err)
 	}
-	defer db2.Close()
+	defer func() {
+		if err := db2.Close(); err != nil {
+			t.Errorf("close db2: %v", err)
+		}
+	}()
 
 	// Verify migrations weren't duplicated
 	var migrationCount int
@@ -79,7 +89,11 @@ func TestDefaultSettingsInserted(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Verify default settings exist
 	defaultKeys := []string{"log_level", "retries", "ignore_errors", "default_platform", "default_key_path"}
@@ -104,7 +118,11 @@ func TestJobsTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Test inserting and querying a job
 	result, err := db.Exec("INSERT INTO jobs (command, args, status) VALUES (?, ?, ?)",
@@ -142,7 +160,11 @@ func TestJobLogsTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Create a job first
 	jobResult, err := db.Exec("INSERT INTO jobs (command, status) VALUES (?, ?)", "hauler", "running")
@@ -180,7 +202,11 @@ func TestSavedManifestsTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Test inserting and querying a saved manifest
 	yamlContent := "apiVersion: content.hauler.cattle.io/v1\nkind: ImageConfig"
@@ -217,7 +243,11 @@ func TestServeProcessesTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Test inserting and querying a serve process
 	args := `{"port": 5000, "readonly": true}`
@@ -258,7 +288,11 @@ func TestJobLogsIndexExists(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Verify the index exists
 	var count int
@@ -280,7 +314,11 @@ func TestDatabasePathCreation(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Verify the database file was created
 	if _, err := os.Stat(dbPath); os.IsNotExist(err) {
@@ -297,7 +335,11 @@ func TestSessionsTableSchema(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Failed to open database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// Test inserting and querying a session
 	result, err := db.Exec("INSERT INTO sessions (token, expires_at) VALUES (?, datetime('now', '+24 hours'))",

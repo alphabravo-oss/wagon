@@ -95,7 +95,7 @@ func (s *Service) List(ctx context.Context) ([]Haul, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	var hauls []Haul
 	for rows.Next() {

@@ -96,7 +96,7 @@ func (h *Handler) ListManifests(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Failed to query manifests", http.StatusInternalServerError)
 		return
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	manifests := []Manifest{}
 	for rows.Next() {
@@ -112,7 +112,9 @@ func (h *Handler) ListManifests(w http.ResponseWriter, r *http.Request) {
 
 		// Parse tags JSON
 		if tagsJSON.Valid && tagsJSON.String != "" {
-			json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
+			if err := json.Unmarshal([]byte(tagsJSON.String), &m.Tags); err != nil {
+				log.Printf("Error parsing tags for manifest %d: %v", m.ID, err)
+			}
 		}
 		if m.Tags == nil {
 			m.Tags = []string{}
@@ -391,7 +393,9 @@ func (h *Handler) getManifestByID(id int64) (*Manifest, error) {
 	m.HaulID = hid.Int64
 
 	if tagsJSON.Valid && tagsJSON.String != "" {
-		json.Unmarshal([]byte(tagsJSON.String), &m.Tags)
+		if err := json.Unmarshal([]byte(tagsJSON.String), &m.Tags); err != nil {
+			log.Printf("Error parsing tags for manifest %d: %v", m.ID, err)
+		}
 	}
 	if m.Tags == nil {
 		m.Tags = []string{}

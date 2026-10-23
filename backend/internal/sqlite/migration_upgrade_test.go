@@ -29,7 +29,11 @@ func openRawDB(t *testing.T) *sql.DB {
 	// that use multiple statements behave identically to production.
 	db.SetMaxOpenConns(1)
 	db.SetMaxIdleConns(1)
-	t.Cleanup(func() { db.Close() })
+	t.Cleanup(func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	})
 	return db
 }
 
@@ -59,12 +63,16 @@ func applyMigrationsUpTo(t *testing.T, db *sql.DB, maxVersion int) {
 	for rows.Next() {
 		var version int
 		if err := rows.Scan(&version); err != nil {
-			rows.Close()
+			if err := rows.Close(); err != nil {
+				t.Errorf("close rows: %v", err)
+			}
 			t.Fatalf("scanning migration version: %v", err)
 		}
 		applied[version] = true
 	}
-	rows.Close()
+	if err := rows.Close(); err != nil {
+		t.Errorf("close rows: %v", err)
+	}
 
 	subFS, err := fs.Sub(migrationsFS, "migrations")
 	if err != nil {
@@ -92,11 +100,15 @@ func applyMigrationsUpTo(t *testing.T, db *sql.DB, maxVersion int) {
 			t.Fatalf("beginning tx for migration %d: %v", version, err)
 		}
 		if _, err := tx.Exec(string(content)); err != nil {
-			tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				t.Errorf("rollback transaction: %v", err)
+			}
 			t.Fatalf("executing migration %d: %v", version, err)
 		}
 		if _, err := tx.Exec("INSERT INTO schema_migrations (version) VALUES (?)", version); err != nil {
-			tx.Rollback()
+			if err := tx.Rollback(); err != nil {
+				t.Errorf("rollback transaction: %v", err)
+			}
 			t.Fatalf("recording migration %d: %v", version, err)
 		}
 		if err := tx.Commit(); err != nil {
@@ -267,7 +279,7 @@ func serveProcessesColumns(t *testing.T, db *sql.DB) map[string]bool {
 	if err != nil {
 		t.Fatalf("reading serve_processes table_info: %v", err)
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 	cols := make(map[string]bool)
 	for rows.Next() {
 		var (
@@ -298,7 +310,11 @@ func TestFreshMigrationsSchemaSanity(t *testing.T) {
 	if err != nil {
 		t.Fatalf("opening fresh database: %v", err)
 	}
-	defer db.Close()
+	defer func() {
+		if err := db.Close(); err != nil {
+			t.Errorf("close db: %v", err)
+		}
+	}()
 
 	// One representative query per key table. Each SELECT names columns that must
 	// exist at head, so a missing table or column fails the query (and the test).
@@ -325,6 +341,8 @@ func TestFreshMigrationsSchemaSanity(t *testing.T) {
 		if err := rows.Err(); err != nil {
 			t.Errorf("iterating representative query on %s: %v", table, err)
 		}
-		rows.Close()
+		if err := rows.Close(); err != nil {
+			t.Errorf("close rows: %v", err)
+		}
 	}
 }
