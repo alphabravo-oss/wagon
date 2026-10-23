@@ -26,7 +26,7 @@ func (m *Manager) requireAuth(next http.Handler) http.Handler {
 		// and leak timing information about which field matched.
 		userMatch := subtle.ConstantTimeCompare([]byte(gotUser), []byte(user)) == 1
 		passMatch := subtle.ConstantTimeCompare([]byte(gotPass), []byte(pass)) == 1
-		if !ok || !(userMatch && passMatch) {
+		if !ok || !userMatch || !passMatch {
 			w.Header().Set("WWW-Authenticate", `Basic realm="hauler"`)
 			http.Error(w, "unauthorized", http.StatusUnauthorized)
 			return

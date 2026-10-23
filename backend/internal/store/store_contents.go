@@ -150,10 +150,10 @@ func (h *Handler) GetInfo(w http.ResponseWriter, r *http.Request) {
 						break
 					}
 				}
-				if sourceHaul = nameSourceMap[normalizedName]; sourceHaul != "" {
-					// Found it
-				} else if sourceHaul = nameSourceMap["library/"+normalizedName]; sourceHaul != "" {
+				sourceHaul = nameSourceMap[normalizedName]
+				if sourceHaul == "" {
 					// Try with library/ prefix for docker hub images
+					sourceHaul = nameSourceMap["library/"+normalizedName]
 				}
 			}
 
