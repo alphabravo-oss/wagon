@@ -2,7 +2,7 @@ import { useState, useEffect, useRef } from 'react'
 import { NavLink } from 'react-router-dom'
 import * as yaml from 'js-yaml'
 import { X, AlertTriangle, Search, Clipboard, RefreshCw, Edit, Trash2, Download } from 'lucide-react'
-import { useModal } from '../components/Modal.jsx'
+import { useModal } from '../components/useModal.js'
 import { useHauls } from '../contexts/HaulContext.jsx'
 
 // Manifest templates based on hauler content.hauler.cattle.io/v1
