@@ -6,8 +6,8 @@ This guide covers setting up a local development environment, building, testing,
 
 ## Prerequisites
 
-- **Go** 1.24+ — Backend development
-- **Node.js** 20+ — Frontend development
+- **Go** 1.26.0+ (toolchain 1.26.10) — Backend development
+- **Node.js** 22+ — Frontend development
 - **Make** — Convenient build commands (optional)
 - **Git** — Version control
 - **Docker** — Container builds and local testing
@@ -77,10 +77,9 @@ wagon/
 │   ├── src/
 │   │   ├── components/     # Reusable UI components
 │   │   ├── contexts/       # React Context providers
-│   │   ├── pages/          # Page components
-│   │   └── lib/            # Utilities and API client
+│   │   └── pages/          # Page components
 │   ├── package.json        # Node dependencies
-│   └── vite.config.ts      # Vite configuration
+│   └── vite.config.js      # Vite configuration
 ├── deploy/                 # Deployment configurations
 │   └── docker-compose.yml  # Production compose file
 ├── docs/                   # Additional documentation
@@ -127,6 +126,9 @@ go build -o ../bin/wagon .
 ```
 
 **Frontend:**
+
+The web app uses plain JavaScript (JSX), with no TypeScript or typecheck step. `web/src/vite-env.d.ts` is only a Vite type stub.
+
 ```bash
 cd web
 npm run build
@@ -217,7 +219,7 @@ export PORT=9090
 cd backend && go run .
 ```
 
-Then update `web/vite.config.ts` to proxy to the new port.
+Then update `web/vite.config.js` to proxy to the new port.
 
 ### Hauler CLI Not Found
 
@@ -281,7 +283,7 @@ test: add integration tests for auth
 ### Code Style
 
 - **Go**: Follow standard Go formatting (`gofmt`)
-- **JavaScript/TypeScript**: Use ESLint configuration
+- **JavaScript (JSX)**: Use ESLint configuration
 - **Comments**: Document public functions and complex logic
 - **Naming**: Use clear, descriptive names
 
