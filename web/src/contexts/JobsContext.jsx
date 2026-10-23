@@ -53,19 +53,6 @@ export function JobsProvider({ children }) {
     return () => clearInterval(interval)
   }, [fetchJobs])
 
-  const createJob = async (command, args = [], envOverrides = {}) => {
-    const res = await fetch('/api/jobs', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ command, args, envOverrides })
-    })
-    if (res.ok) {
-      await fetchJobs()
-      return await res.json()
-    }
-    throw new Error('Failed to create job')
-  }
-
   const deleteAllJobs = async () => {
     const res = await fetch('/api/jobs', { method: 'DELETE' })
     if (res.ok) {
@@ -77,7 +64,7 @@ export function JobsProvider({ children }) {
   }
 
   return (
-    <JobsContext.Provider value={{ jobs, runningJobCount, fetchJobs, createJob, deleteAllJobs }}>
+    <JobsContext.Provider value={{ jobs, runningJobCount, fetchJobs, deleteAllJobs }}>
       {children}
     </JobsContext.Provider>
   )

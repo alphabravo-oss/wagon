@@ -19,7 +19,7 @@ Without a volume mount, **all data is lost** when the container is removed or re
 The container expects a volume mount at `/data`:
 
 ```bash
-docker run -v ./data:/data -p 8080:8080 wagon:latest
+docker run -v ./data:/data -p 127.0.0.1:8080:8080 -e HAULER_UI_PASSWORD=your-strong-password wagon:latest
 ```
 
 Or in docker-compose.yml:
@@ -29,9 +29,9 @@ services:
   wagon:
     build: ..
     ports:
-      - "${PORT:-8080}:8080"   # Main UI
-      - "5000:5000"            # Registry serve
-      - "5001:5001"            # Fileserver serve
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"   # Main UI
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5000:5000"            # Registry serve
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Fileserver serve
     volumes:
       - ./data:/data
     environment:

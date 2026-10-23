@@ -19,6 +19,8 @@ func clearEnv(t *testing.T) {
 		"HAULER_UI_PASSWORD",
 		"HAULER_UI_PUBLISH_USER",
 		"HAULER_UI_PUBLISH_PASSWORD",
+		"HAULER_UI_INSECURE_NO_AUTH",
+		"HAULER_UI_TRUSTED_ORIGINS",
 	} {
 		t.Setenv(key, "")
 	}
@@ -155,5 +157,39 @@ func TestToMapAuthEnabled(t *testing.T) {
 	t.Setenv("HAULER_UI_PASSWORD", "hunter2")
 	if got := Load().ToMap()["authEnabled"]; got != "true" {
 		t.Errorf("authEnabled = %q, want %q (password set)", got, "true")
+	}
+}
+
+func TestValidateRequiresPassword(t *testing.T) {
+	clearEnv(t)
+	if err := Load().Validate(); err != ErrNoPassword {
+		t.Fatalf("default config: Validate() = %v, want ErrNoPassword", err)
+	}
+
+	for _, v := range []string{"1", "yes", "TRUE-ish", "false"} {
+		t.Setenv("HAULER_UI_INSECURE_NO_AUTH", v)
+		if err := Load().Validate(); err != ErrNoPassword {
+			t.Errorf("HAULER_UI_INSECURE_NO_AUTH=%q must not opt out: Validate() = %v", v, err)
+		}
+	}
+
+	t.Setenv("HAULER_UI_INSECURE_NO_AUTH", "true")
+	if err := Load().Validate(); err != nil {
+		t.Errorf("explicit insecure opt-out: Validate() = %v, want nil", err)
+	}
+
+	t.Setenv("HAULER_UI_INSECURE_NO_AUTH", "")
+	t.Setenv("HAULER_UI_PASSWORD", "s3cret")
+	if err := Load().Validate(); err != nil {
+		t.Errorf("password set: Validate() = %v, want nil", err)
+	}
+}
+
+func TestTrustedOrigins(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("HAULER_UI_TRUSTED_ORIGINS", " https://a.example , ,https://b.example:8443")
+	got := Load().TrustedOrigins
+	if len(got) != 2 || got[0] != "https://a.example" || got[1] != "https://b.example:8443" {
+		t.Errorf("TrustedOrigins = %q", got)
 	}
 }
