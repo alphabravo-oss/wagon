@@ -8,6 +8,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"io"
 	"math/big"
 	"net"
 	"os"
@@ -107,9 +108,13 @@ func (cm *CertManager) generateCert(serveType, certPath, keyPath string) (string
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create cert file: %w", err)
 	}
-	defer certOut.Close()
-	if err := pem.Encode(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
+	if err := encodePEMAndClose(certOut, &pem.Block{Type: "CERTIFICATE", Bytes: derBytes}); err != nil {
 		return "", "", fmt.Errorf("failed to write cert: %w", err)
+	}
+
+	privBytes, err := x509.MarshalECPrivateKey(priv)
+	if err != nil {
+		return "", "", fmt.Errorf("failed to marshal key: %w", err)
 	}
 
 	// Write key
@@ -117,15 +122,23 @@ func (cm *CertManager) generateCert(serveType, certPath, keyPath string) (string
 	if err != nil {
 		return "", "", fmt.Errorf("failed to create key file: %w", err)
 	}
-	defer keyOut.Close()
-
-	privBytes, err := x509.MarshalECPrivateKey(priv)
-	if err != nil {
-		return "", "", fmt.Errorf("failed to marshal key: %w", err)
-	}
-	if err := pem.Encode(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}); err != nil {
+	if err := encodePEMAndClose(keyOut, &pem.Block{Type: "EC PRIVATE KEY", Bytes: privBytes}); err != nil {
 		return "", "", fmt.Errorf("failed to write key: %w", err)
 	}
 
 	return certPath, keyPath, nil
+}
+
+// encodePEMAndClose writes block to w and closes it. A Close error is returned
+// (when encoding succeeded) because on some filesystems it is the first point a
+// failed write is reported, and a truncated cert/key must not be reported as OK.
+func encodePEMAndClose(w io.WriteCloser, block *pem.Block) error {
+	if err := pem.Encode(w, block); err != nil {
+		_ = w.Close() // already failing; the encode error is the one to report
+		return err
+	}
+	if err := w.Close(); err != nil {
+		return fmt.Errorf("close: %w", err)
+	}
+	return nil
 }
