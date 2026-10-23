@@ -365,7 +365,7 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "No file provided or error reading file", http.StatusBadRequest)
 		return
 	}
-	defer file.Close()
+	defer func() { _ = file.Close() }() // read-only, nothing to flush
 
 	filename := header.Filename
 	if !strings.HasSuffix(strings.ToLower(filename), ".tar.zst") {
@@ -395,7 +395,9 @@ func (h *Handler) Import(w http.ResponseWriter, r *http.Request) {
 	written, err := io.Copy(destFile, file)
 	if err != nil {
 		log.Printf("Error copying file: %v", err)
-		os.Remove(destinationPath)
+		if err := os.Remove(destinationPath); err != nil && !os.IsNotExist(err) {
+			log.Printf("Error removing cleanup file: %v", err)
+		}
 		http.Error(w, "Failed to save file", http.StatusInternalServerError)
 		return
 	}

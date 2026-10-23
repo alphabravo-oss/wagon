@@ -9,6 +9,7 @@ import (
 	"crypto/x509/pkix"
 	"encoding/pem"
 	"fmt"
+	"log"
 	"math/big"
 	"os"
 	"path/filepath"
@@ -116,8 +117,12 @@ func (m *Manager) SetProvidedTLS(certPEM, keyPEM []byte) error {
 
 // ClearProvidedTLS removes a user-supplied cert and reverts to self-signed.
 func (m *Manager) ClearProvidedTLS() error {
-	os.Remove(filepath.Join(m.tlsDir(), "cert.pem"))
-	os.Remove(filepath.Join(m.tlsDir(), "key.pem"))
+	if err := os.Remove(filepath.Join(m.tlsDir(), "cert.pem")); err != nil && !os.IsNotExist(err) {
+		log.Printf("Error removing provided TLS file: %v", err)
+	}
+	if err := os.Remove(filepath.Join(m.tlsDir(), "key.pem")); err != nil && !os.IsNotExist(err) {
+		log.Printf("Error removing provided TLS file: %v", err)
+	}
 	return m.generateSelfSigned()
 }
 

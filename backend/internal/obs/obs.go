@@ -104,29 +104,37 @@ func MetricsHandler() http.Handler {
 
 		w.Header().Set("Content-Type", "text/plain; version=0.0.4; charset=utf-8")
 
-		fmt.Fprintln(w, "# HELP haulerui_http_requests_total Total HTTP requests handled.")
-		fmt.Fprintln(w, "# TYPE haulerui_http_requests_total counter")
+		var writeErr error
+		write := func(format string, args ...any) {
+			if writeErr != nil {
+				return // client gone; skip further writes
+			}
+			_, writeErr = fmt.Fprintf(w, format, args...)
+		}
+
+		write("# HELP haulerui_http_requests_total Total HTTP requests handled.\n")
+		write("# TYPE haulerui_http_requests_total counter\n")
 		for _, k := range sortedKeys(registry.reqTotal) {
 			method, code, _ := strings.Cut(k, "|")
-			fmt.Fprintf(w, "haulerui_http_requests_total{method=%q,code=%q} %d\n", method, code, registry.reqTotal[k])
+			write("haulerui_http_requests_total{method=%q,code=%q} %d\n", method, code, registry.reqTotal[k])
 		}
 
-		fmt.Fprintln(w, "# HELP haulerui_http_request_duration_seconds Request duration in seconds.")
-		fmt.Fprintln(w, "# TYPE haulerui_http_request_duration_seconds summary")
+		write("# HELP haulerui_http_request_duration_seconds Request duration in seconds.\n")
+		write("# TYPE haulerui_http_request_duration_seconds summary\n")
 		for _, method := range sortedKeysF(registry.durSum) {
-			fmt.Fprintf(w, "haulerui_http_request_duration_seconds_sum{method=%q} %g\n", method, registry.durSum[method])
-			fmt.Fprintf(w, "haulerui_http_request_duration_seconds_count{method=%q} %d\n", method, registry.durCount[method])
+			write("haulerui_http_request_duration_seconds_sum{method=%q} %g\n", method, registry.durSum[method])
+			write("haulerui_http_request_duration_seconds_count{method=%q} %d\n", method, registry.durCount[method])
 		}
 
-		fmt.Fprintln(w, "# HELP haulerui_jobs Current jobs by status.")
-		fmt.Fprintln(w, "# TYPE haulerui_jobs gauge")
+		write("# HELP haulerui_jobs Current jobs by status.\n")
+		write("# TYPE haulerui_jobs gauge\n")
 		for _, status := range sortedKeysI(registry.jobs) {
-			fmt.Fprintf(w, "haulerui_jobs{status=%q} %d\n", status, registry.jobs[status])
+			write("haulerui_jobs{status=%q} %d\n", status, registry.jobs[status])
 		}
 
-		fmt.Fprintln(w, "# HELP haulerui_published_hauls Number of currently published hauls.")
-		fmt.Fprintln(w, "# TYPE haulerui_published_hauls gauge")
-		fmt.Fprintf(w, "haulerui_published_hauls %d\n", registry.hauls)
+		write("# HELP haulerui_published_hauls Number of currently published hauls.\n")
+		write("# TYPE haulerui_published_hauls gauge\n")
+		write("haulerui_published_hauls %d\n", registry.hauls)
 	})
 }
 

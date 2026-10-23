@@ -376,7 +376,7 @@ func (r *Runner) GetLogs(ctx context.Context, jobID int64, since *time.Time) ([]
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	var logs []LogEntry
 	for rows.Next() {
@@ -407,7 +407,7 @@ func (r *Runner) ListJobs(ctx context.Context, status *JobStatus) ([]Job, error)
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	var jobs []Job
 	for rows.Next() {
@@ -472,7 +472,7 @@ func (r *Runner) getSettings(ctx context.Context) (map[string]string, error) {
 	if err != nil {
 		return nil, err
 	}
-	defer rows.Close()
+	defer func() { _ = rows.Close() }() // close error not actionable; rows are fully read or abandoned
 
 	settings := make(map[string]string)
 	for rows.Next() {

@@ -54,7 +54,9 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	defer func() {
 		// Clean up temporary files after job starts
 		for _, f := range tempFiles {
-			os.Remove(f)
+			if err := os.Remove(f); err != nil && !os.IsNotExist(err) {
+				log.Printf("Error removing cleanup file: %v", err)
+			}
 		}
 	}()
 
