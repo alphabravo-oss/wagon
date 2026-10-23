@@ -259,6 +259,18 @@ func (h *Handler) monitorProcess(pid int, cmd *exec.Cmd, stdout, stderr io.ReadC
 	defer func() { _ = stdout.Close() }() // pipes already closed by Wait
 	defer func() { _ = stderr.Close() }() // pipes already closed by Wait
 
+	var drains sync.WaitGroup
+	for _, output := range []io.Reader{stdout, stderr} {
+		drains.Add(1)
+		go func() {
+			defer drains.Done()
+			// Discard output so the child never blocks on a full pipe.
+			_, _ = io.Copy(io.Discard, output)
+		}()
+	}
+	// Wait closes the pipes, so finish reading both streams first.
+	drains.Wait()
+
 	// Wait for process to complete
 	err := cmd.Wait()
 
