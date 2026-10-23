@@ -7,7 +7,7 @@ product:
   description: Graphical single-container control plane for Rancher Government Hauler, for air-gapped content stores.
 owner_bot: wagon-engineer
 details:
-  stack: [Go, React, TypeScript, Vite, Docker]
+  stack: [Go, React, JavaScript (JSX), Vite, Docker]
   license: Apache-2.0
   status: active
   repo: alphabravo-oss/wagon
