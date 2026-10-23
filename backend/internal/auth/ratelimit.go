@@ -121,6 +121,26 @@ func (l *loginLimiter) allow(ip string) (bool, time.Duration) {
 	return false, wait
 }
 
+// refund returns one token to the bucket allow() would have used for key
+// (its own bucket, or the shared overflow bucket when key has none). Middleware
+// uses it so a request denied by the /64 limit does not spend the /48 budget.
+func (l *loginLimiter) refund(key string) {
+	l.mu.Lock()
+	defer l.mu.Unlock()
+
+	b := l.buckets[key]
+	if b == nil {
+		b = l.overflow
+	}
+	if b == nil {
+		return
+	}
+	b.tokens++
+	if b.tokens > l.capacity {
+		b.tokens = l.capacity
+	}
+}
+
 // evictStaleLocked removes buckets idle longer than ttl. Caller must hold l.mu.
 func (l *loginLimiter) evictStaleLocked(now time.Time) {
 	l.lastEvict = now
@@ -201,11 +221,17 @@ func (l *loginLimiter) Middleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		ip := clientIP(r)
 		ok, retryAfter := true, time.Duration(0)
-		if key, isIPv6 := ipv6Prefix48Key(ip); isIPv6 && l.prefix48 != nil {
-			ok, retryAfter = l.prefix48.allow(key)
+		key48, isIPv6 := ipv6Prefix48Key(ip)
+		checkPrefix48 := isIPv6 && l.prefix48 != nil
+		if checkPrefix48 {
+			ok, retryAfter = l.prefix48.allow(key48)
 		}
 		if ok {
 			ok, retryAfter = l.allow(rateLimitKey(ip))
+			if !ok && checkPrefix48 {
+				// Denied /64 requests must not drain the shared /48 bucket.
+				l.prefix48.refund(key48)
+			}
 		}
 		if !ok {
 			secs := int(retryAfter.Seconds())

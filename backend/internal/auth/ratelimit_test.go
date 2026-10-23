@@ -142,6 +142,31 @@ func TestLimiterBoundsBucketsAndSharesOverflow(t *testing.T) {
 	}
 }
 
+func TestLimiterRefund(t *testing.T) {
+	l := &loginLimiter{
+		buckets:  map[string]*tokenBucket{"known": {tokens: 4.5}},
+		capacity: 5,
+	}
+	l.refund("unknown")
+	if len(l.buckets) != 1 || l.overflow != nil {
+		t.Fatal("refund of an unknown key should not create a bucket")
+	}
+	l.overflow = &tokenBucket{tokens: 2}
+	l.refund("known")
+	if l.buckets["known"].tokens != 5 || l.overflow.tokens != 2 {
+		t.Fatal("refund should cap the existing bucket at capacity and leave overflow unchanged")
+	}
+	l.refund("unknown")
+	if l.overflow.tokens != 3 || len(l.buckets) != 1 {
+		t.Fatal("refund of an absent key should restore one overflow token without creating a bucket")
+	}
+	l.overflow.tokens = 5
+	l.refund("unknown")
+	if l.overflow.tokens != 5 {
+		t.Fatal("overflow refund should be capped at capacity")
+	}
+}
+
 func TestLimiterDefaultCapacityAndRefill(t *testing.T) {
 	t.Setenv("HAULER_UI_LOGIN_RATE", "")
 	l := newLoginLimiter()
@@ -297,6 +322,52 @@ func TestLimiterMiddlewareIPv6Prefix48Flood(t *testing.T) {
 		if l.buckets[rateLimitKey(ip)] == nil {
 			t.Fatalf("fresh client %s should get its own bucket", ip)
 		}
+	}
+}
+
+func TestLimiterMiddlewarePrefix48NotDrainedByDeniedRequests(t *testing.T) {
+	t.Setenv("HAULER_UI_TRUST_PROXY", "")
+	t.Setenv("HAULER_UI_LOGIN_RATE", "5")
+	l := newLoginLimiter()
+	l.refillRate = 0
+	l.prefix48.refillRate = 0
+	handler := l.Middleware(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	request := func(ip string) int {
+		t.Helper()
+		r := httptest.NewRequest(http.MethodPost, "/login", nil)
+		r.RemoteAddr = net.JoinHostPort(ip, "5555")
+		w := httptest.NewRecorder()
+		handler.ServeHTTP(w, r)
+		if w.Code == http.StatusTooManyRequests && w.Header().Get("Retry-After") == "" {
+			t.Fatal("429 without Retry-After")
+		}
+		return w.Code
+	}
+	allowed, denied := 0, 0
+	for i := 0; i < 60; i++ {
+		switch status := request("2001:db8:42:1::1"); status {
+		case http.StatusNoContent:
+			allowed++
+		case http.StatusTooManyRequests:
+			denied++
+		default:
+			t.Fatalf("request %d: unexpected status %d", i, status)
+		}
+	}
+	if allowed != 5 || denied != 55 {
+		t.Fatalf("allowed=%d, denied=%d, want 5 and 55", allowed, denied)
+	}
+	b := l.prefix48.buckets["2001:db8:42::/48"]
+	if b == nil || b.tokens != 45 {
+		t.Fatalf("/48 bucket = %+v, want 45 tokens", b)
+	}
+	if status := request("2001:db8:42:2::1"); status != http.StatusNoContent {
+		t.Fatalf("neighbour: status = %d, want %d", status, http.StatusNoContent)
+	}
+	if b.tokens != 44 {
+		t.Fatalf("/48 tokens = %v, want 44", b.tokens)
 	}
 }
 
