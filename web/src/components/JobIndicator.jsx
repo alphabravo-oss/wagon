@@ -1,6 +1,6 @@
 import { useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { useJobs } from '../contexts/JobsContext.jsx'
+import { useJobs } from '../contexts/useJobs.js'
 
 function JobIndicator() {
   const { runningJobCount, fetchJobs } = useJobs()
