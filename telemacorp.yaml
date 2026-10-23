@@ -1,0 +1,28 @@
+# telemacorp.yaml for Wagon (registered by Telemachus Prime; the bot may commit this file to the repo via PR later)
+apiVersion: telemacorp/v1
+kind: Project
+product:
+  slug: wagon
+  name: Wagon
+  description: Graphical single-container control plane for Rancher Government Hauler, for air-gapped content stores.
+owner_bot: wagon-engineer
+details:
+  stack: [Go, React, TypeScript, Vite, Docker]
+  license: Apache-2.0
+  status: active
+  repo: alphabravo-oss/wagon
+links:
+  - {label: Repo, url: https://github.com/alphabravo-oss/wagon, kind: repo}
+  - {label: Open PRs, url: https://github.com/alphabravo-oss/wagon/pulls, kind: pr}
+  - {label: CI (Actions), url: https://github.com/alphabravo-oss/wagon/actions/workflows/ci.yml, kind: ci}
+  - {label: Release Image workflow, url: https://github.com/alphabravo-oss/wagon/actions/workflows/release.yml, kind: ci}
+  - {label: README, url: https://github.com/alphabravo-oss/wagon#readme, kind: docs}
+  - {label: Container image (GHCR), url: https://github.com/alphabravo-oss/wagon/pkgs/container/wagon, kind: env}
+environments: []
+repos:
+  - {url: https://github.com/alphabravo-oss/wagon, default_branch: main}
+rules:
+  - org/core.md
+  - role/engineer.md
+  - product/wagon.md
+
