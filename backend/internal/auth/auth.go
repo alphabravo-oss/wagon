@@ -19,6 +19,7 @@ import (
 )
 
 var pbkdf2Iterations = 600000
+var fatalf = log.Fatalf
 
 const (
 	sessionCookieName = "haulerci_session"
@@ -43,6 +44,12 @@ func NewManager(db *sql.DB, cfg *config.Config) *Manager {
 	if m.enabled {
 		if err := m.revokeSessionsOnPasswordChange(); err != nil {
 			log.Printf("Error checking UI password change: %v", err)
+			// The failed transaction has rolled back before this fallback runs.
+			if _, err := m.db.Exec(`DELETE FROM sessions`); err != nil {
+				fatalf("Refusing to start: unable to revoke UI sessions as a precaution: %v", err)
+				return nil
+			}
+			log.Print("UI sessions revoked as a precaution after a password change check failed")
 		}
 	}
 	return m
@@ -57,21 +64,20 @@ func (m *Manager) revokeSessionsOnPasswordChange() error {
 
 	var saltHex string
 	err = tx.QueryRow(`SELECT v FROM auth_meta WHERE k = 'password_salt'`).Scan(&saltHex)
-	if errors.Is(err, sql.ErrNoRows) {
-		salt := make([]byte, 16)
-		if _, err := rand.Read(salt); err != nil {
-			return fmt.Errorf("generating password salt: %w", err)
-		}
-		saltHex = hex.EncodeToString(salt)
-		if _, err := tx.Exec(`INSERT INTO auth_meta (k, v) VALUES ('password_salt', ?)`, saltHex); err != nil {
-			return fmt.Errorf("storing password salt: %w", err)
-		}
-	} else if err != nil {
+	if err != nil && !errors.Is(err, sql.ErrNoRows) {
 		return fmt.Errorf("reading password salt: %w", err)
 	}
 	salt, err := hex.DecodeString(saltHex)
 	if err != nil || len(salt) != 16 {
-		return errors.New("invalid stored password salt")
+		salt = make([]byte, 16)
+		if _, err := rand.Read(salt); err != nil {
+			return fmt.Errorf("generating password salt: %w", err)
+		}
+		saltHex = hex.EncodeToString(salt)
+		if _, err := tx.Exec(`INSERT INTO auth_meta (k, v) VALUES ('password_salt', ?)
+			ON CONFLICT(k) DO UPDATE SET v = excluded.v`, saltHex); err != nil {
+			return fmt.Errorf("storing password salt: %w", err)
+		}
 	}
 	fingerprint, err := pbkdf2.Key(sha256.New, m.password, salt, pbkdf2Iterations, sha256.Size)
 	if err != nil {
