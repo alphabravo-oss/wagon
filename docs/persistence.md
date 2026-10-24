@@ -19,7 +19,7 @@ Without a volume mount, **all data is lost** when the container is removed or re
 The container expects a volume mount at `/data`:
 
 ```bash
-docker run -v ./data:/data -p 127.0.0.1:8080:8080 -e HAULER_UI_PASSWORD=your-strong-password wagon:latest
+docker run -v wagon-data:/data -p 127.0.0.1:8080:8080 -e HAULER_UI_PASSWORD=your-strong-password wagon:local
 ```
 
 Or in docker-compose.yml:
@@ -39,10 +39,10 @@ services:
       - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}
       - HAULER_LOG_LEVEL=${HAULER_LOG_LEVEL:-info}
       - HAULER_IGNORE_ERRORS=${HAULER_IGNORE_ERRORS:-false}
-      - HAULER_RETRIES=${HAULER_RETRIES:-3}
+      - HAULER_RETRIES=${HAULER_RETRIES:-0}
 ```
 
-> **Note**: The authoritative docker-compose configuration is in `deploy/docker-compose.yml` with environment variable defaults in `deploy/.env.example`.
+> **Note**: The authoritative docker-compose configuration is in `deploy/docker-compose.yml` with environment variable defaults in `deploy/.env.example`. Compose bind-mounts `deploy/data/`, not a named volume.
 
 ## Directory Structure
 
@@ -50,7 +50,10 @@ Within `/data`, the following structure is created:
 
 ```
 /data/
-├── store/          # HAULER_STORE_DIR - Hauler content store
+├── hauls/
+│   └── <slug>/
+│       └── store/  # each haul's content store
+├── store/          # HAULER_STORE_DIR - legacy single store
 ├── tmp/            # HAULER_TEMP_DIR - Temporary files
 ├── .docker/
 │   └── config.json # Docker registry credentials
@@ -62,7 +65,7 @@ Within `/data`, the following structure is created:
 | Variable | Default | Description |
 |----------|---------|-------------|
 | `HAULER_DIR` | `/data` | Base directory for hauler data |
-| `HAULER_STORE_DIR` | `/data/store` | Location where hauler stores downloaded images, charts, and files |
+| `HAULER_STORE_DIR` | `/data/store` | Legacy single store. Each haul has its own store at `/data/hauls/<slug>/store` |
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary storage for operations like sync and extract |
 | `DOCKER_CONFIG` | `/data/.docker` | Directory containing Docker registry authentication |
 | `HOME` | `/data` | Set to `/data` so that `hauler login` writes credentials to the persistent volume |
@@ -76,8 +79,7 @@ For the complete list of environment variables, see `deploy/.env.example`.
 When you run `hauler login <registry>` (via CLI or UI), credentials are stored following the standard Docker auth pattern:
 
 - **Container path**: `/data/.docker/config.json` (or `~/.docker/config.json` which resolves to the same location since `HOME=/data`)
-- **Host mount path**: `./data/.docker/config.json`
-- **Format**: Standard Docker config.json with base64-encoded auth tokens
+- **Format**: Standard Docker config.json. The auth entries are **base64-encoded, not encrypted**
 
 ### Login Flow via UI
 
@@ -90,14 +92,6 @@ When you run `hauler login <registry>` (via CLI or UI), credentials are stored f
 
 ### Viewing Stored Credentials
 
-On the host:
-
-```bash
-cat ./data/.docker/config.json
-```
-
-Inside the container:
-
 ```bash
 docker exec wagon cat /data/.docker/config.json
 ```
@@ -106,7 +100,7 @@ docker exec wagon cat /data/.docker/config.json
 
 ```bash
 # Remove the config file
-rm ./data/.docker/config.json
+docker exec wagon rm /data/.docker/config.json
 
 # Or logout via UI or CLI
 docker exec wagon hauler logout registry.example.com
@@ -116,7 +110,7 @@ docker exec wagon hauler logout registry.example.com
 
 - **In UI**: Passwords are never stored in the SQLite database
 - **In transit**: Credentials passed via environment variables to child process
-- **At rest**: Stored in Docker config.json format (base64 encoded)
+- **At rest**: Stored in Docker config.json format, **base64-encoded, not encrypted**. Anyone who can read the `/data` volume can recover the passwords, so restrict access to the volume and its backups
 - **Logs**: Job logs redact sensitive information
 
 ### Multiple Registries

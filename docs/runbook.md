@@ -9,66 +9,26 @@ Wagon is a single-container web interface for the Rancher Government Hauler CLI.
 
 ## Quick Start
 
-### Using Docker Compose (Recommended)
-
-Create a `docker-compose.yml`:
-
-```yaml
-services:
-  wagon:
-    build: ..
-    ports:
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"   # Main UI (this host only by default)
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5000:5000"            # Registry serve
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Fileserver serve
-    volumes:
-      - ./data:/data
-    environment:
-      - PORT=${PORT:-8080}
-      - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}   # required
-      - HAULER_LOG_LEVEL=${HAULER_LOG_LEVEL:-info}
-      - HAULER_IGNORE_ERRORS=${HAULER_IGNORE_ERRORS:-false}
-      - HAULER_RETRIES=${HAULER_RETRIES:-3}
-```
-
-> **Note**: See `deploy/docker-compose.yml` and `deploy/.env.example` for the authoritative configuration.
-
-Then run:
-
-```bash
-docker compose up -d
-```
-
-Access the UI at http://localhost:8080
-
-### Using Docker Run
-
-```bash
-# Create data directory
-mkdir -p ./data
-
-# Run the container
-docker run -d \
-  --name wagon \
-  -p 127.0.0.1:8080:8080 \
-  -v $(pwd)/data:/data \
-  -e HAULER_UI_PASSWORD=your-strong-password \
-  wagon:latest
-```
+Install, backup and upgrade steps live in the [README](../README.md#quick-start).
+In short: build the image from source (`docker build -t wagon:local .`), then
+run it with `HAULER_UI_PASSWORD` set and a named volume on `/data`. Publish
+`5000` as well if you use Publishing. `ghcr.io/alphabravo-oss/wagon:latest`
+predates the current secure defaults until a new release is cut, so don't use
+it for now.
 
 ## Building from Source
 
 ### Prerequisites
 
-- Go 1.24+
-- Node.js 20+
+- Go 1.26+
+- Node.js 22+
 - Docker (for container build)
 
 ### Build Steps
 
 ```bash
 # Clone the repository
-git clone <repository-url>
+git clone https://github.com/alphabravo-oss/wagon.git
 cd wagon
 
 # Using Make (recommended)
@@ -102,9 +62,9 @@ docker build -t wagon:latest .
 | `HAULER_UI_INSECURE_NO_AUTH` | `false` | **Danger.** `true` starts with no authentication. Local throwaway testing only |
 | `HAULER_LOG_LEVEL` | `info` | Hauler CLI log level (debug, info, warn, error) |
 | `HAULER_IGNORE_ERRORS` | `false` | Continue operations despite errors |
-| `HAULER_RETRIES` | `3` | Number of retries for failed operations |
+| `HAULER_RETRIES` | `0` | Number of retries for failed operations (also settable in the Settings UI) |
 | `HAULER_DIR` | `/data` | Base directory for hauler data |
-| `HAULER_STORE_DIR` | `/data/store` | Content storage location |
+| `HAULER_STORE_DIR` | `/data/store` | Legacy single store. Each haul has its own store at `/data/hauls/<slug>/store` |
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary files location |
 | `DOCKER_CONFIG` | `/data/.docker` | Docker auth config directory |
 | `DATABASE_PATH` | `/data/app.db` | SQLite database path |
@@ -120,10 +80,10 @@ docker build -t wagon:latest .
 The `/data` directory is **required** for persistence:
 
 ```bash
--v /host/path/data:/data
+-v wagon-data:/data
 ```
 
-Without this mount, all data (store contents, registry credentials, settings) will be lost when the container restarts.
+Without this mount, all data (haul stores, registry credentials, settings) is lost when the container is removed.
 
 ## Accessing the UI
 
@@ -133,23 +93,15 @@ Without this mount, all data (store contents, registry credentials, settings) wi
 
 ## Common Workflows
 
-### Beginner Wizards
+### Main pages
 
-The UI includes guided workflows for common airgap scenarios:
-
-1. **Build Store** - Add images, charts, or files and sync from manifests
-2. **Package Haul** - Save store to archive with checksum
-3. **Deploy in Airgap** - Load archive and serve or copy to registry
-
-### Advanced Operations
-
-Each wizard links to detailed pages for:
-- **Store** - Add/remove images, charts, files
-- **Manifests** - Create and manage sync manifests
-- **Serve** - Run embedded registry or fileserver
-- **Copy/Export** - Copy store to external registry or directory
-- **Registry Login** - Authenticate to container registries
-- **Settings** - Configure global flags and defaults
+- **Hauls**: create and switch between hauls; each has its own store
+- **Store Operations / Store Contents**: add images, charts and files; save and load archives
+- **Manifests**: create and manage sync manifests
+- **Publishing**: expose published hauls on the `:5000` front door
+- **Serve**: run a manual registry or fileserver on a port you choose
+- **Registry Login**: authenticate to container registries
+- **Settings**: global hauler flags and defaults
 
 ## Authentication
 
@@ -160,10 +112,10 @@ If it is empty, Wagon logs a configuration error and exits:
 
 ```bash
 docker run -d \
-  -v ./data:/data \
+  -v wagon-data:/data \
   -p 127.0.0.1:8080:8080 \
   -e HAULER_UI_PASSWORD=mys3cr3t \
-  wagon:latest
+  wagon:local
 ```
 
 - Sessions expire after 24 hours
@@ -183,56 +135,13 @@ Registry credentials are stored in Docker config format:
 hauler login registry.example.com --username user --password pass
 ```
 
-Credentials are stored at `/data/.docker/config.json` (inside container) or `./data/.docker/config.json` (on host).
+Credentials are stored at `/data/.docker/config.json` inside the container. They are **base64-encoded, not encrypted**: anyone who can read the volume can read them.
 
 ## Data Management
 
-### Backup
-
-To backup your hauler data:
-
-```bash
-# Stop the container
-docker stop wagon
-
-# Backup the data directory
-tar czf hauler-backup-$(date +%Y%m%d).tar.gz ./data
-
-# Restart the container
-docker start wagon
-```
-
-### Restore
-
-```bash
-# Stop the container
-docker stop wagon
-
-# Restore the data directory
-rm -rf ./data
-tar xzf hauler-backup-YYYYMMDD.tar.gz
-
-# Restart the container
-docker start wagon
-```
-
-### Migration to New Container
-
-```bash
-# Stop old container
-docker stop wagon
-docker rm wagon
-
-# Pull new image
-docker pull wagon:new-version
-
-# Start with same volume mount
-docker run -d \
-  --name wagon \
-  -p 8080:8080 \
-  -v $(pwd)/data:/data \
-  wagon:new-version
-```
+Backup, restore and upgrade steps for the named volume `wagon-data` are in the
+README: [Backup and restore](../README.md#backup-and-restore-docker-run-named-volume)
+and [Upgrade](../README.md#upgrade). Always back up before an upgrade.
 
 ## Logs
 
@@ -262,8 +171,8 @@ Job logs are also available in the UI under "Job History".
 
 2. **Permission denied on /data**
    ```bash
-   # Fix permissions
-   chmod 755 ./data
+   # Check the volume is writable (the container runs as root)
+   docker run --rm --entrypoint ls -v wagon-data:/data wagon:local -ld /data
    ```
 
 ### Registry Login Fails
@@ -272,7 +181,7 @@ Job logs are also available in the UI under "Job History".
 2. **Registry URL** - Include the full registry URL (e.g., `registry.example.com`, not `https://registry.example.com`)
 3. **Existing auth conflict** - Remove old credentials:
    ```bash
-   rm ./data/.docker/config.json
+   docker exec wagon rm /data/.docker/config.json
    docker restart wagon
    ```
 
@@ -280,12 +189,12 @@ Job logs are also available in the UI under "Job History".
 
 1. **Out of disk space** - Check volume space:
    ```bash
-   df -h ./data
+   docker exec wagon df -h /data
    ```
 
 2. **Temp directory full** - Clear temp files:
    ```bash
-   rm -rf ./data/tmp/*
+   docker exec wagon sh -c 'rm -rf /data/tmp/*'
    ```
 
 3. **Network issues** - Check connectivity to registries from within container:
@@ -304,23 +213,14 @@ Job logs are also available in the UI under "Job History".
 
 ### Serve Operations Not Accessible
 
-The embedded registry and fileserver run on separate ports that must be exposed:
+Published hauls and manual serves listen on their own ports, and each one must
+be published from the container:
 
-- **Registry**: Port 5000 (container) → needs `-p 5000:5000`
-- **Fileserver**: Port 5001 (container) → needs `-p 5001:5001`
+- **Publishing front door**: port 5000 (`HAULER_UI_REGISTRY_PORT`) needs `-p 127.0.0.1:5000:5000`
+- **Serve page**: the port you chose there, for example `-p 127.0.0.1:5001:5001`
 
-If using Docker, run with additional port mappings:
-
-```bash
-docker run -d \
-  -p 8080:8080 \
-  -p 5000:5000 \
-  -p 5001:5001 \
-  -v ./data:/data \
-  wagon:latest
-```
-
-If using docker-compose, ensure all three ports are mapped (see Quick Start example above).
+The Compose file publishes 8080, 5000 and 5001 on `HAULER_UI_BIND_ADDR`
+(default `127.0.0.1`).
 
 ## Development
 
