@@ -11,6 +11,13 @@ services:
       - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Optional: manual fileserver serve (user-chosen port)
     volumes:
       - ./data:/data
+    # Every setting in deploy/.env reaches the container. The file is optional,
+    # so without it Wagon still starts and exits with the required-password error.
+    env_file:
+      - path: .env
+        required: false
+    # Explicit safe defaults. These also apply when .env is missing, and they
+    # take precedence over env_file (same values, interpolated from .env).
     environment:
       - PORT=${PORT:-8080}
       # REQUIRED: Wagon refuses to start without a UI password.

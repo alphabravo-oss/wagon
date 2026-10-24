@@ -80,8 +80,13 @@ docker compose -f deploy/docker-compose.yml up -d --build
 
 The compose file builds the image from this checkout. It publishes 8080, 5000
 and 5001 on `127.0.0.1`, and keeps data in `deploy/data/` (a host directory,
-not a named volume). Only the variables listed under `environment:` in
-`deploy/docker-compose.yml` reach the container today.
+not a named volume). Every setting in `deploy/.env` is passed to the container
+(this needs Docker Compose v2.24 or newer). If `deploy/.env` is missing or
+`HAULER_UI_PASSWORD` is left empty, Wagon exits with a password error.
+
+The whole `deploy/.env` file is passed into the container, so don't keep
+unrelated secrets in it. Keep comments on their own line: Compose reads
+`KEY=   # text` as the value `# text`, not as an empty value.
 
 ### Log in
 
