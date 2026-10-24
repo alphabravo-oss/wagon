@@ -63,6 +63,19 @@ func TestSPAShellDoesNotWidenAuth(t *testing.T) {
 		{http.MethodPost, "/"},
 		{http.MethodPut, "/"},
 		{http.MethodDelete, "/favicon.svg"},
+		// Method matching is exact and case-sensitive: "get" is not GET.
+		{"get", "/"},
+		// Path matching is exact: no cleaning, no case folding.
+		{http.MethodGet, "//"},
+		{http.MethodGet, "/./"},
+		{http.MethodGet, "/FAVICON.SVG"},
+		// Only GET and HEAD are public, so OPTIONS and TRACE stay protected.
+		{http.MethodOptions, "/"},
+		{http.MethodOptions, "/favicon.svg"},
+		{http.MethodOptions, "/wagon-logo.svg"},
+		{http.MethodTrace, "/"},
+		{http.MethodTrace, "/favicon.svg"},
+		{http.MethodTrace, "/wagon-logo.svg"},
 	} {
 		t.Run(tc.method+" "+tc.path, func(t *testing.T) {
 			authRequest(t, srv.ServeHTTP, tc.method, tc.path, "", nil, http.StatusUnauthorized)
