@@ -19,6 +19,15 @@
   min-height: 100vh;
   display: flex;
   background-color: var(--bg-primary);
+  /* Paint the sidebar column (260px + 1px border) down the whole page, so it
+     still spans full height when the document is taller than the viewport
+     (full-page captures, print). The fixed .sidebar covers it on screen. */
+  background-image: linear-gradient(
+    to right,
+    var(--bg-secondary) 0 259px,
+    var(--border-color) 259px 260px,
+    transparent 260px
+  );
   color: var(--text-primary);
   font-family: var(--font-sans);
 }
@@ -659,6 +668,49 @@
 }
 
 /* === Operation Cards === */
+/* === Related links (Store Operations page) === */
+.related-link {
+  display: grid;
+  grid-template-columns: 11rem 1fr auto;
+  align-items: center;
+  gap: 1rem;
+  padding: 0.5rem 0.75rem;
+  color: var(--text-secondary);
+  text-decoration: none;
+  font-size: 0.85rem;
+  border-left: 2px solid transparent;
+  transition: all 0.15s ease;
+}
+
+.related-link:hover {
+  color: var(--text-primary);
+  background-color: var(--bg-tertiary);
+  border-left-color: var(--accent-amber);
+}
+
+.related-link-name {
+  font-family: var(--font-mono);
+  font-weight: 500;
+  color: var(--text-primary);
+}
+
+.related-link-desc {
+  font-size: 0.8rem;
+  color: var(--text-muted);
+}
+
+/* === Dashboard next steps === */
+.next-steps {
+  margin: 0 0 0 1.25rem;
+  color: var(--text-secondary);
+  font-size: 0.9rem;
+  line-height: 1.8;
+}
+
+.next-steps a {
+  color: var(--accent-amber);
+}
+
 .operation-card {
   display: flex;
   align-items: center;
@@ -676,6 +728,10 @@
 
 /* === Responsive === */
 @media (max-width: 768px) {
+  .App {
+    background-image: none;
+  }
+
   .sidebar {
     transform: translateX(-100%);
     transition: transform 0.25s ease;

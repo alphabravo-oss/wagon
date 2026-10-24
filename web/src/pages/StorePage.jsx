@@ -2,7 +2,7 @@ import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
 import {
   Image, BarChart3, FileText, RefreshCw, Save, Download, Upload,
-  Clipboard, Globe, Trash2
+  Clipboard, Trash2
 } from 'lucide-react'
 import { useHauls } from '../contexts/useHauls.js'
 
@@ -24,19 +24,18 @@ function Store() {
     { id: 'add-image', name: 'Add Image', description: 'Add container images to the store', icon: Image, route: '/store/add' },
     { id: 'add-chart', name: 'Add Chart', description: 'Add Helm charts to the store', icon: BarChart3, route: '/store/add-chart' },
     { id: 'add-file', name: 'Add File', description: 'Add local files or remote URLs to the store', icon: FileText, route: '/store/add-file' },
-    { id: 'sync', name: 'Sync', description: 'Sync store from manifest files', icon: RefreshCw, route: '/store/sync' },
-    { id: 'save', name: 'Save', description: 'Package store as a portable archive', icon: Save, route: '/store/save' },
-    { id: 'load', name: 'Load', description: 'Load an archive into the store', icon: Download, route: '/store/load' },
-    { id: 'extract', name: 'Extract', description: 'Extract artifacts from the store', icon: Upload, route: '/store/extract' },
-    { id: 'copy', name: 'Copy', description: 'Copy store to registry or directory', icon: Clipboard, route: '/store/copy' },
-    { id: 'serve', name: 'Serve', description: 'Serve registry or fileserver', icon: Globe, route: '/serve' },
-    { id: 'remove', name: 'Remove', description: 'Remove artifacts from store (experimental)', icon: Trash2, route: '/store/remove' },
+    { id: 'sync', name: 'Sync from Manifests', description: 'Sync store from manifest files', icon: RefreshCw, route: '/store/sync' },
+    { id: 'save', name: 'Save Archive', description: 'Package store as a portable archive', icon: Save, route: '/store/save' },
+    { id: 'load', name: 'Load Archive', description: 'Load an archive into the store', icon: Download, route: '/store/load' },
+    { id: 'extract', name: 'Extract Artifacts', description: 'Extract artifacts from the store', icon: Upload, route: '/store/extract' },
+    { id: 'copy', name: 'Copy Store', description: 'Copy store to registry or directory', icon: Clipboard, route: '/store/copy' },
+    { id: 'remove', name: 'Remove Artifacts', description: 'Remove artifacts from store (experimental)', icon: Trash2, route: '/store/remove' },
   ]
 
   // Related pages in the app
   const relatedPages = [
     { name: 'Store Contents', description: 'Browse contents of your content store', route: '/store/contents' },
-    { name: 'Hauls', description: 'Manage haul archive files', route: '/hauls' },
+    { name: 'Hauls', description: 'Isolated workspaces, each with its own content store', route: '/hauls' },
     { name: 'Manifests', description: 'Create and manage hauler manifests', route: '/manifests' },
     { name: 'Registry Login', description: 'Manage container registry credentials', route: '/registry' },
   ]
@@ -45,7 +44,7 @@ function Store() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store</h1>
+          <h1 className="page-title">Store Operations</h1>
           <p className="page-subtitle">
             Operations run against {activeHaul ? <strong style={{ color: 'var(--accent-amber)' }}>{activeHaul.name}</strong> : 'the active haul'}
             {' '}— switch hauls from the top bar
@@ -100,7 +99,7 @@ function Store() {
 
       {/* Store Operations */}
       <div className="card">
-        <div className="card-title">Store Operations</div>
+        <div className="card-title">Operations</div>
         <div style={{ display: 'grid', gridTemplateColumns: 'repeat(auto-fill, minmax(280px, 1fr))', gap: '0.75rem' }}>
           {storeOperations.map(op => (
             <NavLink
@@ -126,19 +125,10 @@ function Store() {
         <div className="card-title">Related Pages</div>
         <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
           {relatedPages.map(page => (
-            <NavLink
-              key={page.name}
-              to={page.route}
-              className="nav-link"
-              style={{ padding: '0.5rem 0.75rem' }}
-            >
-              <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                <span style={{ fontWeight: '500' }}>{page.name}</span>
-                <span style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginRight: '0.5rem' }}>
-                  {page.description}
-                </span>
-                <span>→</span>
-              </div>
+            <NavLink key={page.name} to={page.route} className="related-link">
+              <span className="related-link-name">{page.name}</span>
+              <span className="related-link-desc">{page.description}</span>
+              <span aria-hidden="true">→</span>
             </NavLink>
           ))}
         </div>

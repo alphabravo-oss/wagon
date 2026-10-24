@@ -138,7 +138,7 @@ function Hauls() {
             <div className="empty-state-icon"><FolderOpen size={48} style={{ color: 'var(--text-muted)' }} /></div>
             <div className="empty-state-text">No hauls yet</div>
             <p style={{ color: 'var(--text-secondary)', marginTop: '0.5rem' }}>
-              Create your first haul to start adding content, building archives, and serving an isolated store.
+              A haul is an isolated workspace with its own content store. Create one to start adding images, charts, and files.
             </p>
             <button className="btn btn-primary" style={{ marginTop: '1rem' }} onClick={() => setCreating(true)}>
               <Plus size={16} style={{ marginRight: '0.25rem' }} /> Create Your First Haul
@@ -259,12 +259,12 @@ function Hauls() {
         <div style={{ fontSize: '0.85rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
           <p style={{ marginBottom: '0.5rem' }}>
             A <strong>haul</strong> is an isolated workspace with its own content store. Add images, charts,
-            and files to a haul, build it into a portable <code>.tar.zst</code> archive, and serve it — all
+            and files to a haul, build it into a portable <code>.tar.zst</code> archive, and publish it — all
             without touching your other hauls.
           </p>
           <p style={{ margin: 0 }}>
             The <strong>active haul</strong> (shown in the top bar) is the default target for store operations.
-            Open a haul to manage its contents, archives, and servers.
+            Open a haul to manage its contents, archives, and publishing.
           </p>
         </div>
       </div>

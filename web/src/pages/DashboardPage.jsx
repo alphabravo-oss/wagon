@@ -1,6 +1,5 @@
 import { useState, useEffect } from 'react'
 import { NavLink } from 'react-router-dom'
-import StatusBadge from '../components/StatusBadge.jsx'
 
 function Dashboard() {
   const [health, setHealth] = useState(null)
@@ -22,7 +21,7 @@ function Dashboard() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Dashboard</h1>
-          <p className="page-subtitle">Overview of your hauler system</p>
+          <p className="page-subtitle">Overview of your Wagon instance</p>
         </div>
       </div>
 
@@ -31,10 +30,13 @@ function Dashboard() {
         {health && (
           <div style={{ display: 'flex', flexDirection: 'column', gap: '0.5rem' }}>
             <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-              <StatusBadge status={health.status === 'ok' ? 'succeeded' : 'failed'} />
-              <span style={{ color: 'var(--text-secondary)' }}>
-                Backend: {health.status}
-              </span>
+              {health.status === 'ok' ? (
+                <span className="badge badge-success">Backend OK</span>
+              ) : (
+                <span className="badge badge-error">
+                  Backend {health.status === 'error' ? 'unreachable' : health.status}
+                </span>
+              )}
             </div>
             {capabilities && (
               <div style={{ display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
@@ -51,7 +53,7 @@ function Dashboard() {
       <div className="card">
         <div className="card-title">Quick Actions</div>
         <div style={{ display: 'flex', gap: '0.5rem', flexWrap: 'wrap' }}>
-          <NavLink to="/store" className="btn">View Store</NavLink>
+          <NavLink to="/store" className="btn">Store Operations</NavLink>
           <NavLink to="/manifests" className="btn">Manage Manifests</NavLink>
           <NavLink to="/jobs" className="btn">Job History</NavLink>
         </div>
@@ -59,10 +61,15 @@ function Dashboard() {
 
       <div className="card">
         <div className="card-title">Getting Started</div>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-          Welcome to Wagon. Use the navigation sidebar to manage your container store,
-          create manifests, run hauls, and monitor background jobs.
+        <p style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6', marginBottom: '0.75rem' }}>
+          Welcome to Wagon. A haul is an isolated workspace with its own content store; a Default haul
+          is ready to use.
         </p>
+        <ol className="next-steps">
+          <li><NavLink to="/hauls">Create a haul</NavLink> for your content, or keep using Default.</li>
+          <li><NavLink to="/store/add">Add images</NavLink>, charts, or files to it.</li>
+          <li>Build an archive from the haul&apos;s Archives tab, or <NavLink to="/publish">publish it</NavLink> to a cluster.</li>
+        </ol>
       </div>
     </div>
   )

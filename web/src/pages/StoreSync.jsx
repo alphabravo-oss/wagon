@@ -181,10 +181,10 @@ function StoreSync() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Sync</h1>
+          <h1 className="page-title">Sync from Manifests</h1>
           <p className="page-subtitle">Sync content from manifests to the content store</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (

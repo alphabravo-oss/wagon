@@ -64,10 +64,10 @@ function StoreAddFile() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Add File</h1>
+          <h1 className="page-title">Add File</h1>
           <p className="page-subtitle">Add local files or remote URLs to the hauler store</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (
