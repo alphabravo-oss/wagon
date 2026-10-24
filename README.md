@@ -99,9 +99,9 @@ By default Wagon is only reachable from the machine it runs on. See
 
 1. **Open the UI** — Navigate to `http://localhost:8080` in your browser
 2. **Configure Hauler** — Set global flags in Settings if needed
-3. **Login to a Registry** — Use the Registry page to authenticate (e.g., Docker Hub)
-4. **Add Content** — Go to Store → Add, and add an image, chart, or file
-5. **Save Your Store** — Use Store → Save to create a portable archive
+3. **Login to a Registry** — Use the **Registry Login** page to authenticate (e.g., Docker Hub)
+4. **Add Content** — Go to **Store Operations** and use **Add Image**, **Add Chart**, or **Add File**
+5. **Save Your Store** — Use **Store Operations** → **Save Archive** to create a portable archive
 
 ## Development
 

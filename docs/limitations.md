@@ -8,10 +8,10 @@ This document describes known limitations of Wagon and how the application surfa
 
 **Issue**: Hauler cannot load tarballs created by Podman.
 
-**Affected Operation**: Store Load
+**Affected Operation**: Load Archive
 
 **UI Indication**:
-- Warning banner on the Store Load page: "Docker-saved tarball supported as of v1.3; Podman tarballs not supported"
+- Warning banner on the Load Archive page: "Docker-saved tarball supported as of v1.3; Podman tarballs not supported"
 
 **Workaround**: Use Docker to create tarballs, or use the Hauler CLI directly with supported formats.
 
@@ -19,10 +19,10 @@ This document describes known limitations of Wagon and how the application surfa
 
 **Issue**: When copying to a registry path (e.g., `registry.example.com/myproject`), you must login to the registry root without a path first.
 
-**Affected Operation**: Store Copy
+**Affected Operation**: Copy Store
 
 **UI Indication**:
-- Warning on Store Copy page: "Must login to registry root (no path) before copy to path"
+- Warning on Copy Store page: "Must login to registry root (no path) before copy to path"
 - Inline help text explains the login requirement
 
 **Workaround**: Login to `registry.example.com` (without `/myproject`) before attempting the copy operation.
@@ -33,7 +33,7 @@ This document describes known limitations of Wagon and how the application surfa
 
 **Issue**: The `hauler store remove` command is experimental and may have unexpected behavior.
 
-**Affected Operation**: Store Remove
+**Affected Operation**: Remove Artifacts
 
 **UI Indication**:
 - Warning banner: "Feature is experimental"
@@ -49,7 +49,7 @@ web UI and 5000 is the Publishing front door, so neither can be used for a
 serve. The Serve page defaults to 5002 for the registry and 5001 for the
 fileserver.
 
-**Affected Operation**: Serve Registry, Serve Fileserver
+**Affected Operation**: Serve page (Registry, Fileserver)
 
 **UI Indication**:
 - Port fields show the defaults (5002 registry, 5001 fileserver)
@@ -68,12 +68,12 @@ docker run -p 127.0.0.1:8080:8080 -p 127.0.0.1:5002:5002 -p 127.0.0.1:5001:5001 
 
 **Issue**: Sync, save, and load operations require significant temporary disk space.
 
-**Affected Operations**: Store Sync, Store Save, Store Load
+**Affected Operations**: Sync from Manifests, Save Archive, Load Archive
 
 **UI Indication**:
 - Settings page shows configured temp directory path
 - Job failures due to disk space show clear error messages
-- Store overview page displays temp directory location
+- Store Operations page displays temp directory location
 
 **Workaround**: Ensure adequate disk space or configure a different temp directory via `HAULER_TEMP_DIR`.
 
@@ -87,7 +87,7 @@ docker run -p 127.0.0.1:8080:8080 -p 127.0.0.1:5002:5002 -p 127.0.0.1:5001:5001 
 - No built-in size indicator (planned for future release)
 - Settings page shows store directory path
 
-**Workaround**: Monitor store size on host and use Store Remove operation as needed:
+**Workaround**: Monitor store size on host and use Remove Artifacts operation as needed:
 ```bash
 du -sh ./data/store
 ```
@@ -179,7 +179,7 @@ NO_PROXY=localhost,127.0.0.1
 
 **Issue**: Connecting to insecure registries (HTTP, self-signed certs) requires explicit flags.
 
-**Affected Operations**: Store Add, Store Sync, Store Copy
+**Affected Operations**: Add Image, Add Chart, Add File, Sync from Manifests, Copy Store
 
 **UI Indication**:
 - Toggle options available: "Insecure Skip TLS Verify", "Plain HTTP"
