@@ -213,14 +213,23 @@ Job logs are also available in the UI under "Job History".
 
 ### Serve Operations Not Accessible
 
+To serve hauls to a cluster, follow [Serving hauls to a disconnected
+cluster](./serving.md).
+
 Published hauls and manual serves listen on their own ports, and each one must
 be published from the container:
 
 - **Publishing front door**: port 5000 (`HAULER_UI_REGISTRY_PORT`) needs `-p 127.0.0.1:5000:5000`
-- **Serve page**: the port you chose there, for example `-p 127.0.0.1:5001:5001`
+- **Serve page**: the port you chose there. The defaults are 5002 for the
+  registry (`-p 127.0.0.1:5002:5002`) and 5001 for the fileserver
+  (`-p 127.0.0.1:5001:5001`).
 
 The Compose file publishes 8080, 5000 and 5001 on `HAULER_UI_BIND_ADDR`
 (default `127.0.0.1`).
+
+If the Serve page shows a process as **crashed**, the message under it is
+hauler's last error. For example, `bind: address already in use` means the port
+is taken.
 
 ## Development
 
@@ -248,6 +257,7 @@ make build  # Verify build succeeds
 
 ## Additional Resources
 
+- [Serving hauls to a disconnected cluster](./serving.md)
 - [Persistence Documentation](./persistence.md)
 - [Development Guide](./development.md)
 - Rancher Government Hauler CLI documentation

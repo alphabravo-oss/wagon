@@ -1,11 +1,29 @@
 import { useState, useEffect, useCallback } from 'react'
 import { Package, Folder } from 'lucide-react'
+import { NavLink } from 'react-router-dom'
 import { useHauls } from '../contexts/useHauls.js'
+
+// Defaults avoid the ports Wagon already uses in the same container: the UI on
+// 8080 and Publishing's registry front door on 5000. Keep in sync with
+// backend/internal/serve (DefaultRegistryPort, DefaultFileserverPort).
+const DEFAULT_REGISTRY_PORT = 5002
+const DEFAULT_FILESERVER_PORT = 5001
+
+// The API answers errors with plain text (http.Error), not JSON.
+async function errorText(res, fallback) {
+  const text = (await res.text()).trim()
+  try {
+    const data = JSON.parse(text)
+    return data.message || data.error || fallback
+  } catch {
+    return text || fallback
+  }
+}
 
 function Serve() {
   const { activeHaul } = useHauls()
   // Registry state
-  const [registryPort, setRegistryPort] = useState(5000)
+  const [registryPort, setRegistryPort] = useState(DEFAULT_REGISTRY_PORT)
   const [registryReadonly, setRegistryReadonly] = useState(true)
   const [registryAutoTls, setRegistryAutoTls] = useState(false)
   const [registryTlsCert, setRegistryTlsCert] = useState('')
@@ -17,7 +35,7 @@ function Serve() {
   const [registryLoading, setRegistryLoading] = useState(true)
 
   // Fileserver state
-  const [fileserverPort, setFileserverPort] = useState(5001)
+  const [fileserverPort, setFileserverPort] = useState(DEFAULT_FILESERVER_PORT)
   const [fileserverTimeout, setFileserverTimeout] = useState('')
   const [fileserverAutoTls, setFileserverAutoTls] = useState(false)
   const [fileserverTlsCert, setFileserverTlsCert] = useState('')
@@ -85,7 +103,7 @@ function Serve() {
     try {
       const requestPayload = {
         haulId: activeHaul?.id,
-        port: registryPort || 5000,
+        port: registryPort || DEFAULT_REGISTRY_PORT,
         readonly: registryReadonly,
         tlsCert: registryAutoTls ? undefined : (registryTlsCert || undefined),
         tlsKey: registryAutoTls ? undefined : (registryTlsKey || undefined),
@@ -106,10 +124,8 @@ function Serve() {
         body: JSON.stringify(requestPayload)
       })
 
-      const data = await res.json()
-
       if (!res.ok) {
-        throw new Error(data.message || 'Start registry failed')
+        throw new Error(await errorText(res, 'Start registry failed'))
       }
 
       await fetchRegistryProcesses()
@@ -129,10 +145,8 @@ function Serve() {
         method: 'DELETE'
       })
 
-      const data = await res.json()
-
       if (!res.ok) {
-        throw new Error(data.message || 'Stop registry failed')
+        throw new Error(await errorText(res, 'Stop registry failed'))
       }
 
       await fetchRegistryProcesses()
@@ -151,7 +165,7 @@ function Serve() {
     try {
       const requestPayload = {
         haulId: activeHaul?.id,
-        port: fileserverPort || 8080,
+        port: fileserverPort || DEFAULT_FILESERVER_PORT,
         timeout: fileserverTimeout ? parseInt(fileserverTimeout) : undefined,
         tlsCert: fileserverAutoTls ? undefined : (fileserverTlsCert || undefined),
         tlsKey: fileserverAutoTls ? undefined : (fileserverTlsKey || undefined),
@@ -171,10 +185,8 @@ function Serve() {
         body: JSON.stringify(requestPayload)
       })
 
-      const data = await res.json()
-
       if (!res.ok) {
-        throw new Error(data.message || 'Start fileserver failed')
+        throw new Error(await errorText(res, 'Start fileserver failed'))
       }
 
       await fetchFileserverProcesses()
@@ -194,10 +206,8 @@ function Serve() {
         method: 'DELETE'
       })
 
-      const data = await res.json()
-
       if (!res.ok) {
-        throw new Error(data.message || 'Stop fileserver failed')
+        throw new Error(await errorText(res, 'Stop fileserver failed'))
       }
 
       await fetchFileserverProcesses()
@@ -211,9 +221,9 @@ function Serve() {
   const getStatusBadgeClass = (status) => {
     switch (status) {
       case 'running':
-        return 'badge-warning'
-      case 'stopped':
         return 'badge-success'
+      case 'stopped':
+        return 'badge-info'
       case 'crashed':
         return 'badge-error'
       default:
@@ -226,7 +236,10 @@ function Serve() {
       <div className="page-header">
         <div>
           <h1 className="page-title">Serve</h1>
-          <p className="page-subtitle">Serve content from your store</p>
+          <p className="page-subtitle">
+            Advanced: run one hauler registry or fileserver by hand. To serve hauls to a
+            cluster, use <NavLink to="/publish" style={{ color: 'var(--accent-amber)' }}>Publishing</NavLink> (see docs/serving.md).
+          </p>
         </div>
       </div>
 
@@ -256,13 +269,13 @@ function Serve() {
                   type="number"
                   min="1"
                   max="65535"
-                  placeholder="5000"
+                  placeholder={String(DEFAULT_REGISTRY_PORT)}
                   value={registryPort}
-                  onChange={(e) => setRegistryPort(parseInt(e.target.value) || 5000)}
+                  onChange={(e) => setRegistryPort(parseInt(e.target.value) || DEFAULT_REGISTRY_PORT)}
                   disabled={submitting}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Port for the registry (default: 5000)
+                  Port for the registry (default: {DEFAULT_REGISTRY_PORT}; 5000 is Publishing&apos;s)
                 </div>
               </div>
 
@@ -372,7 +385,7 @@ function Serve() {
 
           {/* Registry Processes */}
           <div className="card" style={{ marginTop: '1rem' }}>
-            <div className="card-title">Running Processes</div>
+            <div className="card-title">Processes</div>
             {registryLoading ? (
               <div style={{ color: 'var(--text-secondary)' }}>Loading...</div>
             ) : registryProcesses.length === 0 ? (
@@ -392,7 +405,14 @@ function Serve() {
                     <tr key={proc.id}>
                       <td className="primary">#{proc.pid}</td>
                       <td>{proc.port}</td>
-                      <td><span className={`badge ${getStatusBadgeClass(proc.status)}`}>{proc.status}</span></td>
+                      <td>
+                        <span className={`badge ${getStatusBadgeClass(proc.status)}`}>{proc.status}</span>
+                        {proc.status === 'crashed' && proc.exitReason && (
+                          <div className="serve-exit-reason" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', marginTop: '0.25rem' }}>
+                            {proc.exitReason}
+                          </div>
+                        )}
+                      </td>
                       <td>
                         {proc.status === 'running' && (
                           <button
@@ -426,7 +446,7 @@ function Serve() {
                     {protocol}://localhost:{port}
                   </code>
                   <p style={{ marginTop: '0.75rem', marginBottom: '0' }}>
-                    Pull images with: <code>docker pull {protocol}://localhost:{port}/myimage:tag</code>
+                    Pull images with: <code>docker pull localhost:{port}/&lt;repo&gt;:&lt;tag&gt;</code>
                   </p>
                   {hasTls && (
                     <p style={{ marginTop: '0.5rem', fontSize: '0.75rem', color: 'var(--text-muted)' }}>
@@ -455,13 +475,13 @@ function Serve() {
                   type="number"
                   min="1"
                   max="65535"
-                  placeholder="8080"
+                  placeholder={String(DEFAULT_FILESERVER_PORT)}
                   value={fileserverPort}
-                  onChange={(e) => setFileserverPort(parseInt(e.target.value) || 8080)}
+                  onChange={(e) => setFileserverPort(parseInt(e.target.value) || DEFAULT_FILESERVER_PORT)}
                   disabled={submitting}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Port for the fileserver (default: 8080)
+                  Port for the fileserver (default: {DEFAULT_FILESERVER_PORT}; 8080 is the UI&apos;s)
                 </div>
               </div>
 
@@ -560,7 +580,7 @@ function Serve() {
 
           {/* Fileserver Processes */}
           <div className="card" style={{ marginTop: '1rem' }}>
-            <div className="card-title">Running Processes</div>
+            <div className="card-title">Processes</div>
             {fileserverLoading ? (
               <div style={{ color: 'var(--text-secondary)' }}>Loading...</div>
             ) : fileserverProcesses.length === 0 ? (
@@ -580,7 +600,14 @@ function Serve() {
                     <tr key={proc.id}>
                       <td className="primary">#{proc.pid}</td>
                       <td>{proc.port}</td>
-                      <td><span className={`badge ${getStatusBadgeClass(proc.status)}`}>{proc.status}</span></td>
+                      <td>
+                        <span className={`badge ${getStatusBadgeClass(proc.status)}`}>{proc.status}</span>
+                        {proc.status === 'crashed' && proc.exitReason && (
+                          <div className="serve-exit-reason" style={{ fontSize: '0.75rem', color: 'var(--accent-red)', marginTop: '0.25rem' }}>
+                            {proc.exitReason}
+                          </div>
+                        )}
+                      </td>
                       <td>
                         {proc.status === 'running' && (
                           <button
@@ -634,11 +661,15 @@ function Serve() {
         <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
           <p style={{ marginBottom: '0.75rem' }}>
             <strong>Registry:</strong> Starts an embedded container registry that serves images from your hauler store.
-            Useful for air-gapped environments or local testing.
+            Useful for local testing.
           </p>
           <p>
             <strong>Fileserver:</strong> Starts an embedded HTTP file server that serves charts, files, and other content
             from your hauler store via HTTP.
+          </p>
+          <p style={{ marginTop: '0.75rem' }}>
+            These run inside the Wagon container, so publish the port you pick (for example{' '}
+            <code>-p 127.0.0.1:{DEFAULT_REGISTRY_PORT}:{DEFAULT_REGISTRY_PORT}</code>). They stop when Wagon restarts.
           </p>
         </div>
       </div>
