@@ -1,5 +1,5 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest'
-import { render, act } from '@testing-library/react'
+import { render, act, screen, fireEvent } from '@testing-library/react'
 
 // The page reads the active haul from HaulContext; drive it directly.
 let mockActiveHaul = { id: 1, name: 'first' }
@@ -7,7 +7,14 @@ vi.mock('../contexts/useHauls.js', () => ({
   useHauls: () => ({ activeHaul: mockActiveHaul }),
 }))
 
-import Serve from './ServePage.jsx'
+import { MemoryRouter } from 'react-router-dom'
+import ServePage from './ServePage.jsx'
+
+const Serve = () => (
+  <MemoryRouter>
+    <ServePage />
+  </MemoryRouter>
+)
 
 const serveCalls = (fetchMock, kind) =>
   fetchMock.mock.calls
@@ -51,5 +58,51 @@ describe('ServePage active haul', () => {
     })
     expect(serveCalls(fetchMock, 'registry')).toEqual(['/api/serve/registry?haul=2'])
     expect(serveCalls(fetchMock, 'fileserver')).toEqual(['/api/serve/fileserver?haul=2'])
+  })
+})
+
+describe('ServePage serve status', () => {
+  afterEach(() => {
+    vi.unstubAllGlobals()
+  })
+
+  it('defaults the registry to 5002 and the fileserver to 5001', async () => {
+    vi.stubGlobal('fetch', vi.fn(async () => ({ ok: true, json: async () => [] })))
+    render(<Serve />)
+    await act(async () => {})
+    const ports = screen.getAllByRole('spinbutton').slice(0, 1)
+    expect(ports[0].value).toBe('5002')
+    expect(screen.getByText(/default: 5002/)).toBeTruthy()
+    expect(screen.getByText(/default: 5001/)).toBeTruthy()
+    expect(screen.queryByText(/default: 8080/)).toBeNull()
+  })
+
+  it('shows the plain-text error when a serve fails to start', async () => {
+    const message = 'Registry serve on port 5000 failed: exit status 1: ERR listen tcp :5000: bind: address already in use'
+    vi.stubGlobal('fetch', vi.fn(async (url, opts) => {
+      if (opts?.method === 'POST') {
+        return { ok: false, text: async () => message + '\n' }
+      }
+      return { ok: true, json: async () => [] }
+    }))
+    render(<Serve />)
+    await act(async () => {})
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /start registry/i }))
+    })
+    expect(screen.getByText(message)).toBeTruthy()
+  })
+
+  it('shows why a crashed serve exited', async () => {
+    const crashed = { id: 7, pid: 4321, port: 5000, status: 'crashed', exitReason: 'exit status 1: bind: address already in use', args: {} }
+    vi.stubGlobal('fetch', vi.fn(async (url) => ({
+      ok: true,
+      json: async () => (String(url).startsWith('/api/serve/registry') ? [crashed] : []),
+    })))
+    render(<Serve />)
+    await act(async () => {})
+    expect(screen.getByText('crashed')).toBeTruthy()
+    expect(screen.getByText('exit status 1: bind: address already in use')).toBeTruthy()
+    expect(screen.queryByRole('button', { name: 'Stop' })).toBeNull()
   })
 })
