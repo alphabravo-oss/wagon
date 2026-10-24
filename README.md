@@ -36,23 +36,56 @@ Wagon is a **single-container web application** that provides full operational p
 
 ## Quick Start
 
-### Docker (Recommended)
+> **Build from source for now.** `ghcr.io/alphabravo-oss/wagon:latest` and
+> `v0.1.0` were published in July 2026, before the current secure defaults:
+> a required UI password, local-only ports, and a working login page. They
+> stay that way until a new release is cut. Until then, build the image as
+> shown below. After a release, use its pinned version tag instead of `:latest`.
+
+You need Docker (with the Compose plugin for option B) and a copy of this repo.
+
+```bash
+git clone https://github.com/alphabravo-oss/wagon.git
+cd wagon
+docker build -t wagon:local .
+```
+
+### A. docker run
 
 ```bash
 # A UI password is required; Wagon refuses to start without one.
 docker run -d \
   --name wagon \
   -p 127.0.0.1:8080:8080 \
+  -p 127.0.0.1:5000:5000 \
   -e HAULER_UI_PASSWORD='choose-a-strong-password' \
   -v wagon-data:/data \
-  ghcr.io/alphabravo-oss/wagon:latest
-
-# Or use Docker Compose (set HAULER_UI_PASSWORD in deploy/.env first)
-cp deploy/.env.example deploy/.env   # then edit HAULER_UI_PASSWORD
-docker compose -f deploy/docker-compose.yml up -d
+  wagon:local
 ```
 
-Access the UI at `http://localhost:8080` and log in with that password.
+- `8080` is the web UI and API.
+- `5000` is the Publishing front door (the registry and files for published
+  hauls). You can leave it out if you don't use Publishing.
+- Manual servers started from the **Serve** page listen on the port you pick
+  there. Publish that port too (for example `-p 127.0.0.1:5001:5001`).
+- All data lives in the named volume `wagon-data`.
+
+### B. Docker Compose
+
+```bash
+cp deploy/.env.example deploy/.env
+# edit deploy/.env and set HAULER_UI_PASSWORD
+docker compose -f deploy/docker-compose.yml up -d --build
+```
+
+The compose file builds the image from this checkout. It publishes 8080, 5000
+and 5001 on `127.0.0.1`, and keeps data in `deploy/data/` (a host directory,
+not a named volume). Only the variables listed under `environment:` in
+`deploy/docker-compose.yml` reach the container today.
+
+### Log in
+
+Open `http://localhost:8080` and log in with the password you set.
 
 By default Wagon is only reachable from the machine it runs on. See
 [Exposing Wagon to other machines](#exposing-wagon-to-other-machines).
@@ -180,7 +213,7 @@ Wagon is configured via environment variables.
 | `HAULER_IGNORE_ERRORS` | `false` | Continue operations despite errors |
 | `HAULER_RETRIES` | `0` | Retries for hauler ops (also settable in the Settings UI) |
 | `HAULER_DIR` | `/data` | Hauler working directory |
-| `HAULER_STORE_DIR` | `/data/store` | Store directory path |
+| `HAULER_STORE_DIR` | `/data/store` | Legacy single store. Each haul has its own store at `/data/hauls/<slug>/store` |
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary files directory |
 | `DOCKER_CONFIG` | `/data/.docker` | Docker auth config directory |
 | `DATABASE_PATH` | `/data/app.db` | SQLite database path |
@@ -189,34 +222,56 @@ Wagon is configured via environment variables.
 
 ### Persistent Data
 
-All persistent data is stored in `/data`:
+Everything Wagon keeps is under `/data` in the container:
 
-- **Hauler store** — Container images, charts, and files
-- **SQLite database** — Jobs, settings, and manifests (`app.db`)
-- **Docker config** — Registry authentication (`.docker/config.json`)
+- `hauls/<slug>/` holds each haul's content store and files.
+- `app.db` is the SQLite database (hauls, jobs, settings, manifests).
+- `.docker/config.json` holds registry logins. They are **base64-encoded, not
+  encrypted**, so anyone who can read the volume can read them.
+- `tmp/` is scratch space for running jobs.
 
-Mount this directory as a volume to persist data across container restarts.
+Always mount `/data` as a volume (`-v wagon-data:/data`). Without one, data is
+lost when the container is removed.
+
+### Backup and restore (docker run, named volume)
+
+These commands use the `wagon:local` image for `tar`, so they need no extra
+images and work offline.
+
+```bash
+# Backup
+docker stop wagon
+docker run --rm --entrypoint tar -v wagon-data:/data -v "$PWD":/backup \
+  wagon:local czf /backup/wagon-backup.tar.gz -C /data .
+docker start wagon
+
+# Restore (replaces everything in the volume)
+docker stop wagon
+docker run --rm --entrypoint sh -v wagon-data:/data -v "$PWD":/backup \
+  wagon:local -c 'rm -rf /data/* /data/.[!.]* && tar xzf /backup/wagon-backup.tar.gz -C /data'
+docker start wagon
+```
+
+With Compose, the data is the `deploy/data/` directory. Stop the stack with
+`docker compose -f deploy/docker-compose.yml stop`, then copy or tar that
+directory with `sudo`, since it is owned by root.
+
+### Upgrade
+
+Your data stays in the volume. Back up first. Database migrations run
+automatically when the new container starts.
+
+```bash
+cd wagon
+git pull
+docker build -t wagon:local .
+docker stop wagon && docker rm wagon
+# then start it again with the same docker run command as in Quick Start
+```
+
+With Compose: `git pull && docker compose -f deploy/docker-compose.yml up -d --build`.
 
 ## Deployment
-
-### Docker Compose
-
-```yaml
-services:
-  wagon:
-    image: ghcr.io/alphabravo-oss/wagon:latest
-    ports:
-      - "127.0.0.1:8080:8080"   # Main UI (this host only)
-      - "127.0.0.1:5000:5000"   # Registry serve
-      - "127.0.0.1:5001:5001"   # Fileserver serve
-    volumes:
-      - wagon-data:/data
-    environment:
-      - HAULER_UI_PASSWORD=your-password  # Required
-
-volumes:
-  wagon-data:
-```
 
 ### Exposing Wagon to other machines
 
@@ -239,16 +294,6 @@ State-changing API requests from a different browser origin are rejected
 otherwise). Jobs are created through the typed endpoints (store, registry,
 ...); there is no generic command endpoint.
 
-### Kubernetes
-
-You can deploy Wagon to Kubernetes using the Docker image. Ensure to:
-
-1. Create a PersistentVolumeClaim for `/data`
-2. Set environment variables as needed
-3. Expose the service on your desired port
-
-Example deployment configuration is available in `deploy/kubernetes/`.
-
 ### Building Your Own Image
 
 ```bash
@@ -256,10 +301,10 @@ Example deployment configuration is available in `deploy/kubernetes/`.
 make docker-build
 
 # Tag for your registry
-docker tag wagon:latest your-registry/wagon:latest
+docker tag wagon:latest your-registry/wagon:<version>
 
 # Push to registry
-docker push your-registry/wagon:latest
+docker push your-registry/wagon:<version>
 ```
 
 ## Architecture
