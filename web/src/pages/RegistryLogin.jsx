@@ -183,8 +183,9 @@ function RegistryLogin() {
               <strong>Storage Location:</strong> <code>{registryInfo.displayPath || registryInfo.dockerAuthPath}</code>
             </p>
             <p style={{ marginTop: '0.75rem', fontSize: '0.85rem' }}>
-              Hauler uses the standard Docker auth pattern. Your credentials are encrypted and stored
-              in the config.json file, which is mounted from the persistent data volume.
+              Hauler uses the standard Docker auth pattern. Your credentials are stored in the config.json
+              file on the persistent data volume. They are <strong>base64-encoded, not encrypted</strong>: anyone
+              who can read the volume can read them, so restrict access to it and its backups.
             </p>
           </div>
         </div>

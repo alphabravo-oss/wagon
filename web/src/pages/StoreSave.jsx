@@ -99,10 +99,10 @@ function StoreSave() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Save</h1>
+          <h1 className="page-title">Save Archive</h1>
           <p className="page-subtitle">Package your store into a portable archive</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (

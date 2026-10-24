@@ -99,10 +99,10 @@ function StoreAddChart() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Add Chart</h1>
+          <h1 className="page-title">Add Chart</h1>
           <p className="page-subtitle">Add Helm charts to the hauler store</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (
@@ -206,14 +206,15 @@ function StoreAddChart() {
                 </div>
               )}
 
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setShowAdvanced(!showAdvanced)}
-                style={{ marginBottom: '1rem' }}
-              >
-                {showAdvanced ? '▼' : '▶'} {showAdvanced ? 'Hide' : 'Show'} Advanced Options
-              </button>
+              <div style={{ marginBottom: '1rem' }}>
+                <button
+                  type="button"
+                  className="btn btn-sm"
+                  onClick={() => setShowAdvanced(!showAdvanced)}
+                >
+                  {showAdvanced ? '▼' : '▶'} {showAdvanced ? 'Hide' : 'Show'} Advanced Options
+                </button>
+              </div>
 
               {showAdvanced && (
                 <div style={{

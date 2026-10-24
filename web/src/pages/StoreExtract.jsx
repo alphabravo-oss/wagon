@@ -97,10 +97,10 @@ function StoreExtract() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Extract</h1>
+          <h1 className="page-title">Extract Artifacts</h1>
           <p className="page-subtitle">Pull specific artifacts from the store to disk</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (

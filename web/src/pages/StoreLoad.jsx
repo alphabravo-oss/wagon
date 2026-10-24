@@ -97,10 +97,10 @@ function StoreLoad() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Load</h1>
+          <h1 className="page-title">Load Archive</h1>
           <p className="page-subtitle">Load archives into the content store</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (

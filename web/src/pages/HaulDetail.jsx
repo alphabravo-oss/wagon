@@ -25,7 +25,7 @@ const TABS = [
   { id: 'contents', label: 'Contents' },
   { id: 'add', label: 'Add Content' },
   { id: 'archives', label: 'Archives' },
-  { id: 'serve', label: 'Serve' },
+  { id: 'serve', label: 'Publish' },
 ]
 
 function HaulDetail() {
@@ -68,7 +68,7 @@ function HaulDetail() {
             <h1 className="page-title" style={{ margin: 0 }}>{haul.name}</h1>
           </div>
           <p className="page-subtitle" style={{ marginTop: '0.4rem' }}>
-            {haul.description || 'Isolated haul workspace'}
+            {haul.description || 'An isolated workspace with its own content store'}
           </p>
         </div>
       </div>
@@ -136,7 +136,7 @@ function OverviewTab({ haul, onGo }) {
           <button className="btn" onClick={() => onGo('add')}><Image size={15} style={{ marginRight: '0.3rem' }} />Add Content</button>
           <button className="btn" onClick={() => onGo('contents')}><Package size={15} style={{ marginRight: '0.3rem' }} />View Contents</button>
           <button className="btn" onClick={() => onGo('archives')}><FileArchive size={15} style={{ marginRight: '0.3rem' }} />Build / Archives</button>
-          <button className="btn" onClick={() => onGo('serve')}><Globe size={15} style={{ marginRight: '0.3rem' }} />Serve</button>
+          <button className="btn" onClick={() => onGo('serve')}><Globe size={15} style={{ marginRight: '0.3rem' }} />Publish</button>
         </div>
       </div>
     </>
@@ -150,10 +150,10 @@ function AddTab() {
     { name: 'Add Image', description: 'Add container images', icon: Image, route: '/store/add' },
     { name: 'Add Chart', description: 'Add Helm charts', icon: BarChart3, route: '/store/add-chart' },
     { name: 'Add File', description: 'Add local files or remote URLs', icon: FileText, route: '/store/add-file' },
-    { name: 'Sync from Manifest', description: 'Populate from a hauler manifest', icon: RefreshCw, route: '/store/sync' },
-    { name: 'Copy to Registry', description: 'Copy store to a registry or directory', icon: Clipboard, route: '/store/copy' },
-    { name: 'Extract', description: 'Extract an artifact from the store', icon: Upload, route: '/store/extract' },
-    { name: 'Remove', description: 'Remove artifacts from the store', icon: Trash2, route: '/store/remove' },
+    { name: 'Sync from Manifests', description: 'Populate from a hauler manifest', icon: RefreshCw, route: '/store/sync' },
+    { name: 'Copy Store', description: 'Copy store to a registry or directory', icon: Clipboard, route: '/store/copy' },
+    { name: 'Extract Artifacts', description: 'Extract an artifact from the store', icon: Upload, route: '/store/extract' },
+    { name: 'Remove Artifacts', description: 'Remove artifacts from the store', icon: Trash2, route: '/store/remove' },
   ]
   return (
     <div className="card">
@@ -317,15 +317,6 @@ function ServeTab({ haul }) {
         </div>
       )}
 
-      <div className="card">
-        <div className="card-title">Ad-hoc Serve</div>
-        <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: 0 }}>
-          Prefer a one-off registry/fileserver on a specific port? Use the manual serve controls.
-        </p>
-        <NavLink to="/serve" className="btn">
-          <Globe size={16} style={{ marginRight: '0.3rem' }} /> Open Serve Controls
-        </NavLink>
-      </div>
     </>
   )
 }
