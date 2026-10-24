@@ -2,10 +2,12 @@ package serve
 
 import (
 	"context"
+	"encoding/json"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
 	"strconv"
+	"strings"
 	"testing"
 	"time"
 )
@@ -333,5 +335,102 @@ func TestExitLine_StripsControlCharacters(t *testing.T) {
 	_, _ = tail.Write([]byte("\x1b[2K\x1b[31mERR\x1b[0m bad\x07 port\r\n"))
 	if got := exitLine(&tail); got != "ERR bad port" {
 		t.Fatalf("exitLine = %q, want %q", got, "ERR bad port")
+	}
+}
+
+// A start that succeeds answers 201 with the JSON body the Serve page reads.
+func TestServe_StartReturns201Body(t *testing.T) {
+	shortGrace(t, 50*time.Millisecond)
+	fakeHauler(t, `exec sleep 30`)
+	for _, tc := range []struct {
+		name    string
+		path    string
+		port    int
+		message string
+	}{
+		{"registry", "/api/serve/registry", 5092, "Registry serve started"},
+		{"fileserver", "/api/serve/fileserver", 5091, "Fileserver serve started"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			e := newTestEnv(t)
+			serve := e.handler.ServeRegistry
+			if tc.name == "fileserver" {
+				serve = e.handler.ServeFileserver
+			}
+			rr := httptest.NewRecorder()
+			body := `{"port":` + strconv.Itoa(tc.port) + `}`
+			serve(rr, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(body)))
+			t.Cleanup(e.handler.StopAll)
+			if rr.Code != http.StatusCreated {
+				t.Fatalf("status = %d (%s), want 201", rr.Code, rr.Body.String())
+			}
+			if ct := rr.Header().Get("Content-Type"); ct != "application/json" {
+				t.Errorf("Content-Type = %q, want application/json", ct)
+			}
+			var got struct {
+				PID       int    `json:"pid"`
+				Port      int    `json:"port"`
+				Status    string `json:"status"`
+				StartedAt string `json:"startedAt"`
+				Message   string `json:"message"`
+				HaulID    int64  `json:"haulId"`
+			}
+			if err := json.Unmarshal(rr.Body.Bytes(), &got); err != nil {
+				t.Fatalf("decode body %q: %v", rr.Body.String(), err)
+			}
+			if got.PID <= 0 || got.Port != tc.port || got.Status != "running" || got.Message != tc.message || got.HaulID != e.haul.ID {
+				t.Fatalf("body = %+v, want pid>0 port %d running %q haul %d", got, tc.port, tc.message, e.haul.ID)
+			}
+			if _, err := time.Parse(time.RFC3339, got.StartedAt); err != nil {
+				t.Errorf("startedAt %q is not RFC3339: %v", got.StartedAt, err)
+			}
+			if status, _ := rowStatus(t, e, got.PID); status != "running" {
+				t.Errorf("row status = %q, want running", status)
+			}
+		})
+	}
+}
+
+// If the stop can't be recorded, the API must not claim success: it answers
+// 500, the process keeps running and the row still reads running.
+func TestStopRegistry_DBErrorReturns500AndKeepsRunning(t *testing.T) {
+	shortGrace(t, 50*time.Millisecond)
+	e := newTestEnv(t)
+	proc, err := e.handler.launch(shellCmd(t, `exec sleep 30`), "registry", 5002, e.haul.ID, `{}`)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	pid := proc.Process.Pid
+	if _, err := e.db.Exec(`ALTER TABLE serve_processes RENAME TO serve_processes_hidden`); err != nil {
+		t.Fatal(err)
+	}
+	rr := httptest.NewRecorder()
+	e.handler.StopRegistry(rr, httptest.NewRequest(http.MethodDelete, "/api/serve/registry/"+strconv.Itoa(pid), nil))
+	if _, err := e.db.Exec(`ALTER TABLE serve_processes_hidden RENAME TO serve_processes`); err != nil {
+		t.Fatal(err)
+	}
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("stop status = %d (%s), want 500", rr.Code, rr.Body.String())
+	}
+	select {
+	case <-proc.done:
+		t.Fatal("process exited although the stop was not recorded")
+	case <-time.After(200 * time.Millisecond):
+	}
+	if proc.status() != "running" {
+		t.Errorf("proc.status() = %q, want running", proc.status())
+	}
+	if status, _ := rowStatus(t, e, pid); status != "running" {
+		t.Fatalf("row status = %q, want running", status)
+	}
+	// A retry once the database works stops it normally.
+	rr = httptest.NewRecorder()
+	e.handler.StopRegistry(rr, httptest.NewRequest(http.MethodDelete, "/api/serve/registry/"+strconv.Itoa(pid), nil))
+	if rr.Code != http.StatusOK {
+		t.Fatalf("retry stop status = %d (%s), want 200", rr.Code, rr.Body.String())
+	}
+	waitDone(t, proc)
+	if status, reason := rowStatus(t, e, pid); status != "stopped" || reason != "" {
+		t.Fatalf("row = %q / %q, want stopped / empty", status, reason)
 	}
 }
