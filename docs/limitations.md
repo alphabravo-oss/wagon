@@ -44,17 +44,22 @@ This document describes known limitations of Wagon and how the application surfa
 
 ### Serve Port Conflicts
 
-**Issue**: The embedded fileserver defaults to port 8080, which conflicts with the main UI port.
+**Issue**: A serve fails to start when its port is already taken. 8080 is the
+web UI and 5000 is the Publishing front door, so neither can be used for a
+serve. The Serve page defaults to 5002 for the registry and 5001 for the
+fileserver.
 
-**Affected Operation**: Serve Fileserver
+**Affected Operation**: Serve Registry, Serve Fileserver
 
 **UI Indication**:
-- Port input field shows default (8080)
-- Error message if port is already in use when starting serve
+- Port fields show the defaults (5002 registry, 5001 fileserver)
+- The start request fails with the reason hauler gave (for example
+  `bind: address already in use`), and the run is listed as crashed with that
+  reason
 
-**Workaround**: Use a different port (e.g., 8081) and add the port mapping:
+**Workaround**: Pick a free port and publish it from the container:
 ```bash
-docker run -p 8080:8080 -p 8081:8081 -v ./data:/data wagon:latest
+docker run -p 127.0.0.1:8080:8080 -p 127.0.0.1:5002:5002 -p 127.0.0.1:5001:5001 -v ./data:/data wagon:latest
 ```
 
 ## Storage Limitations
