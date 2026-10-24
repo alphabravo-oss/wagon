@@ -80,10 +80,10 @@ function StoreRemove() {
     <div className="page">
       <div className="page-header">
         <div>
-          <h1 className="page-title">Store Remove</h1>
+          <h1 className="page-title">Remove Artifacts</h1>
           <p className="page-subtitle">Remove artifacts from the store using string matching</p>
         </div>
-        <NavLink to="/store" className="btn">Back to Store</NavLink>
+        <NavLink to="/store" className="btn">← Store Operations</NavLink>
       </div>
 
       {error && (
