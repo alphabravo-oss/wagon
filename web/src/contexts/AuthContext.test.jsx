@@ -57,6 +57,14 @@ describe('AuthProvider', () => {
     expect(screen.getByText(enabledText)).toBeInTheDocument()
   })
 
+  it('treats a 401 from validate as auth enabled and not logged in', async () => {
+    fetchMock.mockResolvedValueOnce({ ok: false, status: 401, json: async () => { throw new Error('not JSON') } })
+    render(<AuthProvider><AuthConsumer /></AuthProvider>)
+    await screen.findByText('Auth ready')
+    expect(screen.getByText('Unauthenticated')).toBeInTheDocument()
+    expect(screen.getByText('Auth enabled')).toBeInTheDocument()
+  })
+
   it('POSTs the password and authenticates after successful login', async () => {
     await renderAuth()
     fetchMock.mockResolvedValueOnce(response({ success: true }))
