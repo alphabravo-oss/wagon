@@ -13,6 +13,11 @@ export function AuthProvider({ children }) {
         const data = await res.json()
         setIsAuthenticated(data.authenticated)
         setAuthEnabled(data.authEnabled)
+      } else if (res.status === 401) {
+        // The auth middleware rejects /api/auth/validate without a session,
+        // which means auth is enabled and this browser is not logged in.
+        setIsAuthenticated(false)
+        setAuthEnabled(true)
       }
     } catch (err) {
       console.error('Failed to check auth status:', err)

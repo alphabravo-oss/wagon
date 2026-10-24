@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
 import Brand from '../components/Brand.jsx'
+import { useAuth } from '../contexts/useAuth.js'
 import './Login.css'
 
 export default function Login() {
@@ -9,6 +10,7 @@ export default function Login() {
   const [loading, setLoading] = useState(false)
   const [authEnabled, setAuthEnabled] = useState(true)
   const navigate = useNavigate()
+  const { checkAuth } = useAuth()
 
   useEffect(() => {
     // Check if auth is enabled and if user is already authenticated
@@ -44,7 +46,9 @@ export default function Login() {
         throw new Error(data.message || 'Login failed')
       }
 
-      // Redirect to home on successful login
+      // Refresh the shared auth state before leaving, or ProtectedRoute still
+      // sees the pre-login state and sends the browser back to /login.
+      await checkAuth()
       navigate('/')
     } catch (err) {
       setError(err.message)

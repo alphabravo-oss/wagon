@@ -200,7 +200,7 @@ func (m *Manager) Middleware(next http.Handler) http.Handler {
 		}
 
 		// Allow login endpoint without authentication
-		if isPublicPath(r.URL.Path) {
+		if isPublicPath(r.URL.Path) || isPublicShell(r) {
 			next.ServeHTTP(w, r)
 			return
 		}
@@ -238,6 +238,21 @@ func isPublicPath(path string) bool {
 		return true
 	}
 
+	return false
+}
+
+// isPublicShell reports whether r fetches the static SPA shell: index.html at
+// "/" and the two icons it links. The browser must load these without a
+// session to render the login form; they contain no data. Matching is exact
+// and limited to GET/HEAD, so no other path or method is opened.
+func isPublicShell(r *http.Request) bool {
+	if r.Method != http.MethodGet && r.Method != http.MethodHead {
+		return false
+	}
+	switch r.URL.Path {
+	case "/", "/favicon.svg", "/wagon-logo.svg":
+		return true
+	}
 	return false
 }
 
