@@ -34,6 +34,9 @@ services:
       - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Fileserver serve
     volumes:
       - ./data:/data
+    env_file:                # every setting in deploy/.env reaches the container
+      - path: .env
+        required: false
     environment:
       - PORT=${PORT:-8080}
       - HAULER_UI_PASSWORD=${HAULER_UI_PASSWORD:-}
