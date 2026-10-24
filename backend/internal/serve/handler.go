@@ -4,6 +4,7 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"log"
@@ -11,6 +12,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"regexp"
 	"strconv"
 	"strings"
 	"sync"
@@ -21,6 +23,13 @@ import (
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
+)
+
+// Default ports for manual serves. They avoid the UI (8080) and Publishing's
+// registry front door (5000), which run in the same container.
+const (
+	DefaultRegistryPort   = 5002
+	DefaultFileserverPort = 5001
 )
 
 // Handler handles HTTP requests for serve operations
@@ -39,6 +48,11 @@ type managedProcess struct {
 	StartedAt time.Time
 	Logs      []string
 	LogMu     sync.Mutex
+
+	// done is closed after the process exits and its row is updated;
+	// exitReason is set (under LogMu) just before.
+	done       chan struct{}
+	exitReason string
 }
 
 // NewHandler creates a new serve handler
@@ -130,10 +144,10 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set default port
+	// Default to 5002: Publishing's registry front door already listens on 5000.
 	port := req.Port
 	if port == 0 {
-		port = 5000
+		port = DefaultRegistryPort
 	}
 
 	// Prevent port collisions across concurrently served hauls.
@@ -193,79 +207,106 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	// Start the process
 	cmd := exec.Command("hauler", args...)
 	cmd.Dir = h.cfg.DataDir
-
-	// Capture stdout and stderr for log streaming
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("Error creating stdout pipe: %v", err)
-		http.Error(w, "Failed to create stdout pipe", http.StatusInternalServerError)
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("Error creating stderr pipe: %v", err)
-		http.Error(w, "Failed to create stderr pipe", http.StatusInternalServerError)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("Error starting registry serve: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to start registry serve: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	pid := cmd.Process.Pid
-
-	// Track the managed process
-	managedProc := &managedProcess{
-		Cmd:       cmd,
-		Process:   cmd.Process,
-		StartedAt: time.Now(),
-		Logs:      []string{},
-	}
-
-	h.mu.Lock()
-	h.processes[pid] = managedProc
-	h.mu.Unlock()
-
-	// Start a goroutine to monitor the process and capture logs
-	go h.monitorProcess(pid, cmd, stdout, stderr)
-
-	// Store in database
 	argsJSON, _ := json.Marshal(req)
-	_, err = h.db.Exec(`
-		INSERT INTO serve_processes (serve_type, pid, port, args, status, haul_id)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, "registry", pid, port, string(argsJSON), "running", haul.ID)
+	proc, err := h.launch(cmd, "registry", port, haul.ID, string(argsJSON))
 	if err != nil {
-		log.Printf("Error storing serve process in database: %v", err)
+		http.Error(w, fmt.Sprintf("Registry serve on port %d failed: %v", port, err), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"pid":       pid,
+		"pid":       proc.Process.Pid,
 		"port":      port,
 		"status":    "running",
-		"startedAt": managedProc.StartedAt.Format(time.RFC3339),
+		"startedAt": proc.StartedAt.Format(time.RFC3339),
 		"message":   "Registry serve started",
 		"haulId":    haul.ID,
 	})
 }
 
-// monitorProcess monitors a running process and captures its output
-func (h *Handler) monitorProcess(pid int, cmd *exec.Cmd, stdout, stderr io.ReadCloser) {
+// startupGrace is how long launch waits for a new serve process to fail before
+// reporting it as running. hauler exits within milliseconds when its port is
+// taken or its flags are wrong.
+var startupGrace = 2 * time.Second
+
+// launch starts cmd, records it, and waits up to startupGrace so a process that
+// exits at once is reported as an error instead of as running. The database row
+// is written before the monitor starts, so the monitor's exit update can never
+// run first and leave a dead process marked "running".
+func (h *Handler) launch(cmd *exec.Cmd, serveType string, port int, haulID int64, argsJSON string) (*managedProcess, error) {
+	stdout, err := cmd.StdoutPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stdout pipe: %w", err)
+	}
+	stderr, err := cmd.StderrPipe()
+	if err != nil {
+		return nil, fmt.Errorf("create stderr pipe: %w", err)
+	}
+	if err := cmd.Start(); err != nil {
+		return nil, fmt.Errorf("start: %w", err)
+	}
+	pid := cmd.Process.Pid
+
+	res, err := h.db.Exec(`
+		INSERT INTO serve_processes (serve_type, pid, port, args, status, haul_id)
+		VALUES (?, ?, ?, ?, 'running', ?)
+	`, serveType, pid, port, argsJSON, haulID)
+	var rowID int64
+	if err == nil {
+		rowID, err = res.LastInsertId()
+	}
+	if err != nil {
+		log.Printf("Error storing serve process in database: %v", err)
+	}
+
+	proc := &managedProcess{
+		Cmd:       cmd,
+		Process:   cmd.Process,
+		StartedAt: time.Now(),
+		Logs:      []string{},
+		done:      make(chan struct{}),
+	}
+	h.mu.Lock()
+	h.processes[pid] = proc
+	h.mu.Unlock()
+
+	go h.monitorProcess(rowID, pid, cmd, stdout, stderr, proc.done)
+
+	select {
+	case <-proc.done:
+		if proc.exitReason == "" {
+			return nil, errors.New("exited immediately")
+		}
+		return nil, errors.New(proc.exitReason)
+	case <-time.After(startupGrace):
+		return proc, nil
+	}
+}
+
+// monitorProcess waits for a serve process to exit and records the outcome. A
+// clean exit is "stopped"; any other exit is "crashed" with the error and the
+// last line hauler printed (for example "bind: address already in use"). A row
+// already marked "stopped" by a Stop request keeps that status.
+func (h *Handler) monitorProcess(rowID int64, pid int, cmd *exec.Cmd, stdout, stderr io.ReadCloser, done chan struct{}) {
 	// Close pipes when done
 	defer func() { _ = stdout.Close() }() // pipes already closed by Wait
 	defer func() { _ = stderr.Close() }() // pipes already closed by Wait
 
+	// One tail per stream: hauler logs (including ERR lines) go to stdout,
+	// while cobra prints usage text to stderr.
+	var outTail, errTail outputTail
 	var drains sync.WaitGroup
-	for _, output := range []io.Reader{stdout, stderr} {
+	for _, s := range []struct {
+		r    io.Reader
+		tail *outputTail
+	}{{stdout, &outTail}, {stderr, &errTail}} {
 		drains.Add(1)
 		go func() {
 			defer drains.Done()
-			// Discard output so the child never blocks on a full pipe.
-			_, _ = io.Copy(io.Discard, output)
+			// Keep only the last bytes so the child never blocks on a full pipe.
+			_, _ = io.Copy(s.tail, s.r)
 		}()
 	}
 	// Wait closes the pipes, so finish reading both streams first.
@@ -274,34 +315,103 @@ func (h *Handler) monitorProcess(pid int, cmd *exec.Cmd, stdout, stderr io.ReadC
 	// Wait for process to complete
 	err := cmd.Wait()
 
+	status, exitReason := "stopped", ""
+	if err != nil {
+		status, exitReason = "crashed", err.Error()
+		if line := exitLine(&outTail, &errTail); line != "" {
+			exitReason += ": " + line
+		}
+	}
+
 	// Capture final status
 	h.mu.Lock()
 	managedProc, exists := h.processes[pid]
 	if exists {
 		managedProc.LogMu.Lock()
 		if err != nil {
-			managedProc.Logs = append(managedProc.Logs, fmt.Sprintf("Process exited: %v", err))
+			managedProc.Logs = append(managedProc.Logs, "Process exited: "+exitReason)
 		} else {
 			managedProc.Logs = append(managedProc.Logs, "Process exited cleanly")
 		}
+		managedProc.exitReason = exitReason
 		managedProc.LogMu.Unlock()
 		delete(h.processes, pid)
 	}
 	h.mu.Unlock()
 
-	// Update database
-	exitReason := ""
-	if err != nil {
-		exitReason = err.Error()
-	}
 	_, dbErr := h.db.Exec(`
 		UPDATE serve_processes
 		SET status = ?, stopped_at = CURRENT_TIMESTAMP, exit_reason = ?
-		WHERE pid = ?
-	`, "stopped", exitReason, pid)
+		WHERE id = ? AND status = 'running'
+	`, status, exitReason, rowID)
 	if dbErr != nil {
 		log.Printf("Error updating serve process in database: %v", dbErr)
 	}
+	if done != nil {
+		close(done)
+	}
+}
+
+// outputTail keeps the last tailSize bytes written to it.
+type outputTail struct {
+	mu  sync.Mutex
+	buf []byte
+}
+
+const tailSize = 4096
+
+func (t *outputTail) Write(p []byte) (int, error) {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	t.buf = append(t.buf, p...)
+	if len(t.buf) > tailSize {
+		t.buf = t.buf[len(t.buf)-tailSize:]
+	}
+	return len(p), nil
+}
+
+var (
+	ansiEscape   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	logTimestamp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\S*\s+`)
+	errorMarker  = regexp.MustCompile(`(?i)\b(err|error|fatal|ftl)\b`)
+)
+
+// lines returns the tail's non-empty lines without color codes or timestamps.
+func (t *outputTail) lines() []string {
+	t.mu.Lock()
+	defer t.mu.Unlock()
+	var out []string
+	for _, line := range strings.Split(ansiEscape.ReplaceAllString(string(t.buf), ""), "\n") {
+		if line = logTimestamp.ReplaceAllString(strings.TrimSpace(line), ""); line != "" {
+			out = append(out, line)
+		}
+	}
+	return out
+}
+
+// exitLine picks the line that best explains an exit: the last error line in
+// either stream, else the last line of output.
+func exitLine(tails ...*outputTail) string {
+	var last string
+	for _, t := range tails {
+		lines := t.lines()
+		for i := len(lines) - 1; i >= 0; i-- {
+			if errorMarker.MatchString(lines[i]) {
+				return clip(lines[i])
+			}
+		}
+		if last == "" && len(lines) > 0 {
+			last = lines[len(lines)-1]
+		}
+	}
+	return clip(last)
+}
+
+func clip(line string) string {
+	if len(line) > 300 {
+		return line[len(line)-300:]
+	}
+	return line
 }
 
 // StopRegistry handles DELETE /api/serve/registry/:pid
@@ -476,7 +586,7 @@ func (h *Handler) queryProcesses(serveType, haulFilter string) ([]map[string]int
 	query := `
 		SELECT id, serve_type, pid, port, args, status, started_at, stopped_at, exit_reason, haul_id
 		FROM serve_processes
-		WHERE serve_type = ?`
+		WHERE serve_type = ? AND COALESCE(role, 'manual') = 'manual'`
 	queryArgs := []interface{}{serveType}
 	if haulFilter != "" {
 		if haulID, err := strconv.ParseInt(haulFilter, 10, 64); err == nil {
@@ -546,10 +656,10 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Set default port
+	// Default to 5001: the UI already listens on 8080.
 	port := req.Port
 	if port == 0 {
-		port = 8080
+		port = DefaultFileserverPort
 	}
 
 	// Prevent port collisions across concurrently served hauls.
@@ -596,61 +706,20 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	// Start the process
 	cmd := exec.Command("hauler", args...)
 	cmd.Dir = h.cfg.DataDir
-
-	// Capture stdout and stderr for log streaming
-	stdout, err := cmd.StdoutPipe()
-	if err != nil {
-		log.Printf("Error creating stdout pipe: %v", err)
-		http.Error(w, "Failed to create stdout pipe", http.StatusInternalServerError)
-		return
-	}
-	stderr, err := cmd.StderrPipe()
-	if err != nil {
-		log.Printf("Error creating stderr pipe: %v", err)
-		http.Error(w, "Failed to create stderr pipe", http.StatusInternalServerError)
-		return
-	}
-
-	if err := cmd.Start(); err != nil {
-		log.Printf("Error starting fileserver serve: %v", err)
-		http.Error(w, fmt.Sprintf("Failed to start fileserver serve: %v", err), http.StatusInternalServerError)
-		return
-	}
-
-	pid := cmd.Process.Pid
-
-	// Track the managed process
-	managedProc := &managedProcess{
-		Cmd:       cmd,
-		Process:   cmd.Process,
-		StartedAt: time.Now(),
-		Logs:      []string{},
-	}
-
-	h.mu.Lock()
-	h.processes[pid] = managedProc
-	h.mu.Unlock()
-
-	// Start a goroutine to monitor the process and capture logs
-	go h.monitorProcess(pid, cmd, stdout, stderr)
-
-	// Store in database
 	argsJSON, _ := json.Marshal(req)
-	_, err = h.db.Exec(`
-		INSERT INTO serve_processes (serve_type, pid, port, args, status, haul_id)
-		VALUES (?, ?, ?, ?, ?, ?)
-	`, "fileserver", pid, port, string(argsJSON), "running", haul.ID)
+	proc, err := h.launch(cmd, "fileserver", port, haul.ID, string(argsJSON))
 	if err != nil {
-		log.Printf("Error storing serve process in database: %v", err)
+		http.Error(w, fmt.Sprintf("Fileserver serve on port %d failed: %v", port, err), http.StatusInternalServerError)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusCreated)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
-		"pid":       pid,
+		"pid":       proc.Process.Pid,
 		"port":      port,
 		"status":    "running",
-		"startedAt": managedProc.StartedAt.Format(time.RFC3339),
+		"startedAt": proc.StartedAt.Format(time.RFC3339),
 		"message":   "Fileserver serve started",
 		"haulId":    haul.ID,
 	})

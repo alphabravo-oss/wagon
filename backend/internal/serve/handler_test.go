@@ -286,10 +286,10 @@ func TestServeRegistry_UnknownHaulID(t *testing.T) {
 func TestServeRegistry_PortConflict(t *testing.T) {
 	e := newTestEnv(t)
 
-	// Record a running process on the default registry port (5000). A valid
-	// empty-body request resolves the default haul, defaults to port 5000,
+	// Record a running process on the default registry port (5002). A valid
+	// empty-body request resolves the default haul, defaults to port 5002,
 	// sees the conflict, and returns 409 -- all before reaching exec.
-	e.seedProcess(t, "registry", 4321, 5000, "running", e.haul.ID)
+	e.seedProcess(t, "registry", 4321, DefaultRegistryPort, "running", e.haul.ID)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(`{}`))
 	rr := httptest.NewRecorder()
@@ -344,8 +344,8 @@ func TestServeFileserver_UnknownHaulID(t *testing.T) {
 func TestServeFileserver_PortConflict(t *testing.T) {
 	e := newTestEnv(t)
 
-	// Default fileserver port is 8080.
-	e.seedProcess(t, "fileserver", 7777, 8080, "running", e.haul.ID)
+	// Default fileserver port is 5001.
+	e.seedProcess(t, "fileserver", 7777, DefaultFileserverPort, "running", e.haul.ID)
 
 	req := httptest.NewRequest(http.MethodPost, "/api/serve/fileserver", strings.NewReader(`{}`))
 	rr := httptest.NewRecorder()
