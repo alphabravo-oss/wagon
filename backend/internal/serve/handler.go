@@ -16,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 
@@ -49,10 +50,42 @@ type managedProcess struct {
 	Logs      []string
 	LogMu     sync.Mutex
 
+	// rowID is this run's serve_processes row. Stops and the monitor update
+	// the row by id, never by pid, because pids are reused.
+	rowID int64
+	// stopRequested is set before a Stop (user or shutdown) signals the
+	// process, so its exit is recorded as stopped, not crashed.
+	stopRequested atomic.Bool
 	// done is closed after the process exits and its row is updated;
 	// exitReason is set (under LogMu) just before.
 	done       chan struct{}
 	exitReason string
+}
+
+// status is what the API reports for a process launch returned.
+func (p *managedProcess) status() string {
+	if p.stopRequested.Load() {
+		return "stopped"
+	}
+	return "running"
+}
+
+// stop marks the row stopped and then signals the process. The row is written
+// first so the monitor, which only updates rows still marked running, can never
+// record a requested stop as a crash.
+func (h *Handler) stop(p *managedProcess) error {
+	p.stopRequested.Store(true)
+	if _, err := h.db.Exec(`
+		UPDATE serve_processes
+		SET status = 'stopped', stopped_at = CURRENT_TIMESTAMP, exit_reason = NULL
+		WHERE id = ? AND status = 'running'
+	`, p.rowID); err != nil {
+		log.Printf("Error marking serve process %d stopped: %v", p.Process.Pid, err)
+	}
+	if err := p.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
+		return err
+	}
+	return nil
 }
 
 // NewHandler creates a new serve handler
@@ -78,7 +111,9 @@ func (h *Handler) StopAll() {
 
 	for _, p := range procs {
 		if p.Process != nil {
-			_ = p.Process.Signal(syscall.SIGTERM)
+			if err := h.stop(p); err != nil {
+				log.Printf("serve: stopping process %d: %v", p.Process.Pid, err)
+			}
 		}
 	}
 	if len(procs) > 0 {
@@ -219,7 +254,7 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"pid":       proc.Process.Pid,
 		"port":      port,
-		"status":    "running",
+		"status":    proc.status(),
 		"startedAt": proc.StartedAt.Format(time.RFC3339),
 		"message":   "Registry serve started",
 		"haulId":    haul.ID,
@@ -234,7 +269,8 @@ var startupGrace = 2 * time.Second
 // launch starts cmd, records it, and waits up to startupGrace so a process that
 // exits at once is reported as an error instead of as running. The database row
 // is written before the monitor starts, so the monitor's exit update can never
-// run first and leave a dead process marked "running".
+// run first and leave a dead process marked "running". A Stop during the grace
+// is not an error: launch returns the process, whose status() is "stopped".
 func (h *Handler) launch(cmd *exec.Cmd, serveType string, port int, haulID int64, argsJSON string) (*managedProcess, error) {
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
@@ -266,30 +302,37 @@ func (h *Handler) launch(cmd *exec.Cmd, serveType string, port int, haulID int64
 		Process:   cmd.Process,
 		StartedAt: time.Now(),
 		Logs:      []string{},
+		rowID:     rowID,
 		done:      make(chan struct{}),
 	}
 	h.mu.Lock()
 	h.processes[pid] = proc
 	h.mu.Unlock()
 
-	go h.monitorProcess(rowID, pid, cmd, stdout, stderr, proc.done)
+	go h.monitorProcess(proc, stdout, stderr)
 
 	select {
 	case <-proc.done:
-		if proc.exitReason == "" {
-			return nil, errors.New("exited immediately")
+		if proc.stopRequested.Load() {
+			return proc, nil
 		}
-		return nil, errors.New(proc.exitReason)
+		proc.LogMu.Lock()
+		reason := proc.exitReason
+		proc.LogMu.Unlock()
+		return nil, errors.New(reason)
 	case <-time.After(startupGrace):
 		return proc, nil
 	}
 }
 
-// monitorProcess waits for a serve process to exit and records the outcome. A
-// clean exit is "stopped"; any other exit is "crashed" with the error and the
-// last line hauler printed (for example "bind: address already in use"). A row
-// already marked "stopped" by a Stop request keeps that status.
-func (h *Handler) monitorProcess(rowID int64, pid int, cmd *exec.Cmd, stdout, stderr io.ReadCloser, done chan struct{}) {
+// monitorProcess waits for a serve process to exit and records the outcome. An
+// exit after a Stop request is "stopped"; any other exit, including exit 0
+// (a serve should run until stopped), is "crashed" with the error and the last
+// line hauler printed (for example "bind: address already in use"). It updates
+// only this run's row, and only while that row is still "running", so a Stop
+// (which marks the row first) always wins.
+func (h *Handler) monitorProcess(proc *managedProcess, stdout, stderr io.ReadCloser) {
+	cmd, pid := proc.Cmd, proc.Process.Pid
 	// Close pipes when done
 	defer func() { _ = stdout.Close() }() // pipes already closed by Wait
 	defer func() { _ = stderr.Close() }() // pipes already closed by Wait
@@ -316,39 +359,45 @@ func (h *Handler) monitorProcess(rowID int64, pid int, cmd *exec.Cmd, stdout, st
 	err := cmd.Wait()
 
 	status, exitReason := "stopped", ""
-	if err != nil {
-		status, exitReason = "crashed", err.Error()
+	if !proc.stopRequested.Load() {
+		status = "crashed"
+		if err != nil {
+			exitReason = err.Error()
+		} else {
+			exitReason = "exited unexpectedly (exit status 0)"
+		}
 		if line := exitLine(&outTail, &errTail); line != "" {
 			exitReason += ": " + line
 		}
 	}
 
-	// Capture final status
+	proc.LogMu.Lock()
+	if exitReason != "" {
+		proc.Logs = append(proc.Logs, "Process exited: "+exitReason)
+	} else {
+		proc.Logs = append(proc.Logs, "Process stopped")
+	}
+	proc.exitReason = exitReason
+	proc.LogMu.Unlock()
+
+	// Forget the process, unless the pid already belongs to a newer one.
 	h.mu.Lock()
-	managedProc, exists := h.processes[pid]
-	if exists {
-		managedProc.LogMu.Lock()
-		if err != nil {
-			managedProc.Logs = append(managedProc.Logs, "Process exited: "+exitReason)
-		} else {
-			managedProc.Logs = append(managedProc.Logs, "Process exited cleanly")
-		}
-		managedProc.exitReason = exitReason
-		managedProc.LogMu.Unlock()
+	if h.processes[pid] == proc {
 		delete(h.processes, pid)
 	}
 	h.mu.Unlock()
 
-	_, dbErr := h.db.Exec(`
-		UPDATE serve_processes
-		SET status = ?, stopped_at = CURRENT_TIMESTAMP, exit_reason = ?
-		WHERE id = ? AND status = 'running'
-	`, status, exitReason, rowID)
-	if dbErr != nil {
-		log.Printf("Error updating serve process in database: %v", dbErr)
+	if status == "crashed" {
+		if _, dbErr := h.db.Exec(`
+			UPDATE serve_processes
+			SET status = 'crashed', stopped_at = CURRENT_TIMESTAMP, exit_reason = ?
+			WHERE id = ? AND status = 'running'
+		`, exitReason, proc.rowID); dbErr != nil {
+			log.Printf("Error updating serve process in database: %v", dbErr)
+		}
 	}
-	if done != nil {
-		close(done)
+	if proc.done != nil {
+		close(proc.done)
 	}
 }
 
@@ -371,7 +420,10 @@ func (t *outputTail) Write(p []byte) (int, error) {
 }
 
 var (
-	ansiEscape   = regexp.MustCompile(`\x1b\[[0-9;]*m`)
+	// ANSI CSI sequences (colors, cursor moves) and any other control bytes
+	// except tab, so the recorded reason is plain text.
+	ansiEscape   = regexp.MustCompile(`\x1b\[[0-?]*[ -/]*[@-~]`)
+	controlChars = regexp.MustCompile(`[\x00-\x08\x0b-\x1f\x7f]`)
 	logTimestamp = regexp.MustCompile(`^\d{4}-\d{2}-\d{2}[ T]\d{2}:\d{2}:\d{2}\S*\s+`)
 	errorMarker  = regexp.MustCompile(`(?i)\b(err|error|fatal|ftl)\b`)
 )
@@ -382,6 +434,7 @@ func (t *outputTail) lines() []string {
 	defer t.mu.Unlock()
 	var out []string
 	for _, line := range strings.Split(ansiEscape.ReplaceAllString(string(t.buf), ""), "\n") {
+		line = controlChars.ReplaceAllString(line, "")
 		if line = logTimestamp.ReplaceAllString(strings.TrimSpace(line), ""); line != "" {
 			out = append(out, line)
 		}
@@ -443,7 +496,7 @@ func (h *Handler) StopRegistry(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		// Check database for historical record
 		var status string
-		row := h.db.QueryRow("SELECT status FROM serve_processes WHERE pid = ?", pid)
+		row := h.db.QueryRow("SELECT status FROM serve_processes WHERE pid = ? ORDER BY id DESC LIMIT 1", pid)
 		_ = row.Scan(&status)
 		if status == "stopped" {
 			http.Error(w, "Process already stopped", http.StatusGone)
@@ -453,19 +506,12 @@ func (h *Handler) StopRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send SIGTERM for graceful shutdown
-	if err := managedProc.Process.Signal(syscall.SIGTERM); err != nil {
+	// Mark the row stopped, then send SIGTERM for graceful shutdown.
+	if err := h.stop(managedProc); err != nil {
 		log.Printf("Error sending SIGTERM to process %d: %v", pid, err)
 		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	// Update database immediately
-	_, _ = h.db.Exec(`
-		UPDATE serve_processes
-		SET status = ?, stopped_at = CURRENT_TIMESTAMP
-		WHERE pid = ?
-	`, "stopped", pid)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -529,7 +575,7 @@ func (h *Handler) GetRegistryStatus(w http.ResponseWriter, r *http.Request) {
 		SELECT serve_type, port, args, status, started_at, stopped_at, exit_reason
 		FROM serve_processes
 		WHERE pid = ?
-		ORDER BY started_at DESC
+		ORDER BY id DESC
 		LIMIT 1
 	`, pid)
 
@@ -718,7 +764,7 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"pid":       proc.Process.Pid,
 		"port":      port,
-		"status":    "running",
+		"status":    proc.status(),
 		"startedAt": proc.StartedAt.Format(time.RFC3339),
 		"message":   "Fileserver serve started",
 		"haulId":    haul.ID,
@@ -754,7 +800,7 @@ func (h *Handler) StopFileserver(w http.ResponseWriter, r *http.Request) {
 	if !exists {
 		// Check database for historical record
 		var status string
-		row := h.db.QueryRow("SELECT status FROM serve_processes WHERE pid = ?", pid)
+		row := h.db.QueryRow("SELECT status FROM serve_processes WHERE pid = ? ORDER BY id DESC LIMIT 1", pid)
 		_ = row.Scan(&status)
 		if status == "stopped" {
 			http.Error(w, "Process already stopped", http.StatusGone)
@@ -764,19 +810,12 @@ func (h *Handler) StopFileserver(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Send SIGTERM for graceful shutdown
-	if err := managedProc.Process.Signal(syscall.SIGTERM); err != nil {
+	// Mark the row stopped, then send SIGTERM for graceful shutdown.
+	if err := h.stop(managedProc); err != nil {
 		log.Printf("Error sending SIGTERM to process %d: %v", pid, err)
 		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), http.StatusInternalServerError)
 		return
 	}
-
-	// Update database immediately
-	_, _ = h.db.Exec(`
-		UPDATE serve_processes
-		SET status = ?, stopped_at = CURRENT_TIMESTAMP
-		WHERE pid = ?
-	`, "stopped", pid)
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
@@ -840,7 +879,7 @@ func (h *Handler) GetFileserverStatus(w http.ResponseWriter, r *http.Request) {
 		SELECT serve_type, port, args, status, started_at, stopped_at, exit_reason
 		FROM serve_processes
 		WHERE pid = ?
-		ORDER BY started_at DESC
+		ORDER BY id DESC
 		LIMIT 1
 	`, pid)
 

@@ -6,6 +6,8 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"os/exec"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -597,4 +599,57 @@ func countProcesses(t *testing.T, e *testEnv) int {
 		t.Fatalf("count processes: %v", err)
 	}
 	return n
+}
+
+// fakeHauler puts a "hauler" script first in PATH for the test.
+func fakeHauler(t *testing.T, script string) {
+	t.Helper()
+	if _, err := exec.LookPath("/bin/sh"); err != nil {
+		t.Skip("/bin/sh unavailable")
+	}
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "hauler"), []byte("#!/bin/sh\n"+script+"\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", dir+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
+// When hauler cannot bind its port it exits at once; the start request must
+// fail with 500 and the reason, and the row must read crashed.
+func TestServeRegistry_BindFailureReturns500(t *testing.T) {
+	fakeHauler(t, `printf '\033[31mERR\033[0m listen tcp :5002: bind: address already in use\n'; exit 1`)
+	e := newTestEnv(t)
+
+	rr := httptest.NewRecorder()
+	e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(`{}`)))
+
+	const reason = "exit status 1: ERR listen tcp :5002: bind: address already in use"
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s), want 500", rr.Code, rr.Body.String())
+	}
+	if want := "Registry serve on port 5002 failed: " + reason; strings.TrimSpace(rr.Body.String()) != want {
+		t.Fatalf("body = %q, want %q", rr.Body.String(), want)
+	}
+	var status, got string
+	if err := e.db.QueryRow(`SELECT status, COALESCE(exit_reason, '') FROM serve_processes`).Scan(&status, &got); err != nil {
+		t.Fatal(err)
+	}
+	if status != "crashed" || got != reason {
+		t.Fatalf("row = %q / %q, want crashed / %q", status, got, reason)
+	}
+}
+
+func TestServeFileserver_BindFailureReturns500(t *testing.T) {
+	fakeHauler(t, `echo 'ERR listen tcp :5001: bind: address already in use'; exit 1`)
+	e := newTestEnv(t)
+
+	rr := httptest.NewRecorder()
+	e.handler.ServeFileserver(rr, httptest.NewRequest(http.MethodPost, "/api/serve/fileserver", strings.NewReader(`{}`)))
+
+	if rr.Code != http.StatusInternalServerError {
+		t.Fatalf("status = %d (%s), want 500", rr.Code, rr.Body.String())
+	}
+	if !strings.Contains(rr.Body.String(), "bind: address already in use") {
+		t.Fatalf("body = %q, want the bind error", rr.Body.String())
+	}
 }
