@@ -35,6 +35,8 @@ All notable changes to Wagon will be documented in this file.
 - Moved repository references to `github.com/alphabravo-oss/wagon` and release
   images to `ghcr.io/alphabravo-oss/wagon`.
 - Replaced the application logo, wordmark, and favicon with the Wagon branding.
+- Renamed the haul page's **Publish** tab to **Client Access** so it no longer
+  shares a name with the **Publishing** page.
 
 ### Removed
 
