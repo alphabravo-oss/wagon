@@ -70,28 +70,50 @@ func (p *managedProcess) status() string {
 	return "running"
 }
 
-// stop marks the row stopped and then signals the process. The row is written
-// first so the monitor, which only updates rows still marked running, can never
-// record a requested stop as a crash. If the row can't be written, the process
-// is left running and the error is returned, so the API never reports a stop
-// that the database does not show.
+// errNotRunning means stop found no "running" row for the process: it was
+// already stopped or crashed, or its row was never recorded.
+var errNotRunning = errors.New("no running serve_processes row to stop (already stopped, or never recorded)")
+
+// stop marks the row stopped, then sets stopRequested, then signals the
+// process. The row is written first so the monitor, which only updates rows
+// still marked running, can never record a requested stop as a crash, and
+// stopRequested is set before the signal so the exit it causes reads as
+// stopped. If the row can't be written or no row was updated, the process is
+// left running and the error is returned, so neither the API nor status()
+// ever reports a stop that the database does not show.
 func (h *Handler) stop(p *managedProcess) error {
-	p.stopRequested.Store(true)
-	if _, err := h.db.Exec(`
+	res, err := h.db.Exec(`
 		UPDATE serve_processes
 		SET status = 'stopped', stopped_at = CURRENT_TIMESTAMP, exit_reason = NULL
 		WHERE id = ? AND status = 'running'
-	`, p.rowID); err != nil {
-		p.stopRequested.Store(false)
+	`, p.rowID)
+	if err != nil {
 		return fmt.Errorf("recording stop: %w", err)
 	}
+	n, err := res.RowsAffected()
+	if err != nil {
+		return fmt.Errorf("checking stop: %w", err)
+	}
+	if n == 0 {
+		return errNotRunning
+	}
+	p.stopRequested.Store(true)
 	return terminate(p)
+}
+
+// stopErrorStatus is the HTTP status for a failed stop: 409 when there was no
+// running row to stop, 500 otherwise.
+func stopErrorStatus(err error) int {
+	if errors.Is(err, errNotRunning) {
+		return http.StatusConflict
+	}
+	return http.StatusInternalServerError
 }
 
 // terminate sends SIGTERM; a process that already exited is not an error.
 func terminate(p *managedProcess) error {
 	if err := p.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
-		return err
+		return fmt.Errorf("sending SIGTERM: %w", err)
 	}
 	return nil
 }
@@ -521,8 +543,8 @@ func (h *Handler) StopRegistry(w http.ResponseWriter, r *http.Request) {
 
 	// Mark the row stopped, then send SIGTERM for graceful shutdown.
 	if err := h.stop(managedProc); err != nil {
-		log.Printf("Error sending SIGTERM to process %d: %v", pid, err)
-		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), http.StatusInternalServerError)
+		log.Printf("serve: stopping registry process %d: %v", pid, err)
+		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), stopErrorStatus(err))
 		return
 	}
 
@@ -825,8 +847,8 @@ func (h *Handler) StopFileserver(w http.ResponseWriter, r *http.Request) {
 
 	// Mark the row stopped, then send SIGTERM for graceful shutdown.
 	if err := h.stop(managedProc); err != nil {
-		log.Printf("Error sending SIGTERM to process %d: %v", pid, err)
-		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), http.StatusInternalServerError)
+		log.Printf("serve: stopping fileserver process %d: %v", pid, err)
+		http.Error(w, fmt.Sprintf("Failed to stop process: %v", err), stopErrorStatus(err))
 		return
 	}
 
