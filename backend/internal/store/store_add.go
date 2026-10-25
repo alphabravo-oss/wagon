@@ -108,14 +108,14 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 	})
 }
 
-// AddChartRequest represents the request to add a chart to the store
+// AddChartRequest represents the request to add a chart to the store.
+// It has no username/password: hauler ignores them on `store add chart` and
+// they would be visible in the process argv.
 type AddChartRequest struct {
 	HaulID                int64  `json:"haulId,omitempty"`
 	Name                  string `json:"name"`
 	RepoURL               string `json:"repoUrl,omitempty"`
 	Version               string `json:"version,omitempty"`
-	Username              string `json:"username,omitempty"`
-	Password              string `json:"password,omitempty"`
 	KeyFile               string `json:"keyFile,omitempty"`
 	CertFile              string `json:"certFile,omitempty"`
 	CAFile                string `json:"caFile,omitempty"`
@@ -161,14 +161,6 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 	// Optional version
 	if req.Version != "" {
 		args = append(args, "--version", req.Version)
-	}
-
-	// Optional username/password for auth
-	if req.Username != "" {
-		args = append(args, "--username", req.Username)
-	}
-	if req.Password != "" {
-		args = append(args, "--password", req.Password)
 	}
 
 	// Optional TLS files
