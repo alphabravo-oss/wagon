@@ -93,6 +93,30 @@ describe('ServePage serve status', () => {
     expect(screen.getByText(message)).toBeTruthy()
   })
 
+  it('has no registry config file input and never sends configFile', async () => {
+    const fetchMock = vi.fn(async (url, opts) => {
+      if (opts?.method === 'POST') {
+        return { ok: true, json: async () => ({ pid: 1, port: 5002, status: 'running' }) }
+      }
+      return { ok: true, json: async () => [] }
+    })
+    vi.stubGlobal('fetch', fetchMock)
+    const { container } = render(<Serve />)
+    await act(async () => {})
+    fireEvent.click(screen.getAllByRole('button', { name: /show advanced/i })[0])
+    expect(screen.getByText('Store Directory')).toBeTruthy()
+    expect(screen.queryByText('Config File')).toBeNull()
+    expect(container.querySelector('input[placeholder="/path/to/config.yaml"]')).toBeNull()
+
+    await act(async () => {
+      fireEvent.click(screen.getByRole('button', { name: /start registry/i }))
+    })
+    const posts = fetchMock.mock.calls.filter(([, opts]) => opts?.method === 'POST')
+    expect(posts).toHaveLength(1)
+    expect(posts[0][0]).toBe('/api/serve/registry')
+    expect(JSON.parse(posts[0][1].body)).not.toHaveProperty('configFile')
+  })
+
   it('shows why a crashed serve exited', async () => {
     const crashed = { id: 7, pid: 4321, port: 5000, status: 'crashed', exitReason: 'exit status 1: bind: address already in use', args: {} }
     vi.stubGlobal('fetch', vi.fn(async (url) => ({
