@@ -268,3 +268,49 @@ func TestServe_BodyTooLarge(t *testing.T) {
 		})
 	}
 }
+
+// The 64 KiB cap is exact: a body one byte over gets 413, and a body at the cap
+// is still decoded and checked like any other request.
+func TestServe_BodyCapBoundary(t *testing.T) {
+	pad := func(prefix string, size int) string {
+		return prefix + `,"pad":"` + strings.Repeat("a", size-len(prefix)-len(`,"pad":""}`)) + `"}`
+	}
+	for _, ep := range serveEndpoints {
+		t.Run(ep.name, func(t *testing.T) {
+			argv := argvHauler(t)
+			e := newTestEnv(t)
+			if rr := post(e, ep, pad(`{"directory":"/etc"`, maxServeBody+1)); rr.Code != http.StatusRequestEntityTooLarge {
+				t.Errorf("cap+1: status %d body %q, want 413", rr.Code, rr.Body.String())
+			}
+			if rr := post(e, ep, pad(`{"directory":"/etc"`, maxServeBody)); rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "directory must be a folder inside") {
+				t.Errorf("at cap: status %d body %q, want 400 directory error", rr.Code, rr.Body.String())
+			}
+			if got := argv(); got != "" {
+				t.Fatalf("hauler ran with %q", got)
+			}
+			assertNoProcessesStarted(t, e)
+		})
+	}
+}
+
+// configFile is refused the same way under the body cap: 400 for a body at the
+// cap, 413 once the body is over it. hauler never runs either way.
+func TestServeRegistry_ConfigFileUnderBodyCap(t *testing.T) {
+	ep := serveEndpoints[0]
+	argv := argvHauler(t)
+	e := newTestEnv(t)
+	body := func(size int) string {
+		prefix := `{"configFile":"/tmp/writable.yaml"`
+		return prefix + `,"pad":"` + strings.Repeat("a", size-len(prefix)-len(`,"pad":""}`)) + `"}`
+	}
+	if rr := post(e, ep, body(maxServeBody)); rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "configFile is no longer supported") {
+		t.Errorf("at cap: status %d body %q, want 400 configFile error", rr.Code, rr.Body.String())
+	}
+	if rr := post(e, ep, body(maxServeBody+1)); rr.Code != http.StatusRequestEntityTooLarge {
+		t.Errorf("cap+1: status %d body %q, want 413", rr.Code, rr.Body.String())
+	}
+	if got := argv(); got != "" {
+		t.Fatalf("hauler ran with %q", got)
+	}
+	assertNoProcessesStarted(t, e)
+}
