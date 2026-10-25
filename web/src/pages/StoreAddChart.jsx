@@ -11,8 +11,6 @@ function StoreAddChart() {
   const [name, setName] = useState('')
   const [repoUrl, setRepoUrl] = useState('')
   const [version, setVersion] = useState('')
-  const [username, setUsername] = useState('')
-  const [password, setPassword] = useState('')
   const [keyFile, setKeyFile] = useState('')
   const [certFile, setCertFile] = useState('')
   const [caFile, setCaFile] = useState('')
@@ -25,7 +23,6 @@ function StoreAddChart() {
   const [loading, setLoading] = useState(false)
   const [error, setError] = useState(null)
   const [showAdvanced, setShowAdvanced] = useState(false)
-  const [showAuth, setShowAuth] = useState(false)
 
   // Fetch capabilities to check for --add-dependencies and --add-images support
   const [capabilities, setCapabilities] = useState(null)
@@ -66,8 +63,6 @@ function StoreAddChart() {
           name,
           repoUrl: repoUrl || undefined,
           version: version || undefined,
-          username: username || undefined,
-          password: password || undefined,
           keyFile: keyFile || undefined,
           certFile: certFile || undefined,
           caFile: caFile || undefined,
@@ -161,50 +156,6 @@ function StoreAddChart() {
                   Specific chart version (defaults to latest)
                 </div>
               </div>
-
-              <button
-                type="button"
-                className="btn btn-sm"
-                onClick={() => setShowAuth(!showAuth)}
-                style={{ marginBottom: '1rem' }}
-              >
-                {showAuth ? '▼' : '▶'} {showAuth ? 'Hide' : 'Show'} Authentication Options
-              </button>
-
-              {showAuth && (
-                <div style={{
-                  padding: '1rem',
-                  backgroundColor: 'var(--bg-tertiary)',
-                  border: '1px dashed var(--border-color)',
-                  borderRadius: '2px',
-                  marginBottom: '1rem'
-                }}>
-                  <div className="card-title" style={{ border: 'none', paddingBottom: '0' }}>Authentication</div>
-
-                  <div className="form-group">
-                    <label className="form-label">Username (Optional)</label>
-                    <input
-                      className="form-input"
-                      placeholder="username"
-                      value={username}
-                      onChange={(e) => setUsername(e.target.value)}
-                      disabled={loading}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Password (Optional)</label>
-                    <input
-                      className="form-input"
-                      type="password"
-                      placeholder="••••••••"
-                      value={password}
-                      onChange={(e) => setPassword(e.target.value)}
-                      disabled={loading}
-                    />
-                  </div>
-                </div>
-              )}
 
               <div style={{ marginBottom: '1rem' }}>
                 <button
@@ -418,7 +369,7 @@ function StoreAddChart() {
             <div className="card-title">TLS & Authentication</div>
             <div style={{ fontSize: '0.8rem', color: 'var(--text-secondary)', lineHeight: '1.6' }}>
               <p style={{ marginTop: 0 }}>
-                Private chart repositories may require <strong>authentication</strong> via username/password or client certificates.
+                Username/password <strong>authentication</strong> for chart repositories is not supported: hauler ignores those flags when adding a chart.
               </p>
               <p>
                 Use TLS options to configure certificate verification for repositories with custom or self-signed certificates.

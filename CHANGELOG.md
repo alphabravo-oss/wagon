@@ -29,6 +29,13 @@ All notable changes to Wagon will be documented in this file.
 - Renamed the haul page's **Publish** tab to **Client Access** so it no longer
   shares a name with the **Publishing** page.
 
+### Removed
+
+- Add Chart no longer has username/password fields, and
+  `POST /api/store/add-chart` ignores `username` and `password`. Hauler ignores
+  `--username`/`--password` on `store add chart`, and passing them exposed the
+  credentials in the process argv.
+
 ## [0.1.0] - 2026-07-11
 
 First tagged release. Finalizes the multi-haul + publish work and adds a round
