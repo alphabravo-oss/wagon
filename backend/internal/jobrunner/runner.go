@@ -2,6 +2,7 @@ package jobrunner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -71,6 +72,33 @@ func (r *Runner) DB() *sql.DB {
 
 // CreateJob creates a new job in the database
 func (r *Runner) CreateJob(ctx context.Context, command string, args []string, envOverrides map[string]string) (*Job, error) {
+	return r.createJob(ctx, command, args, envOverrides, StatusQueued)
+}
+
+// CreateStdinJob creates a job and starts it at once with stdin as the
+// command's standard input, for secrets such as a registry password read by
+// --password-stdin. stdin stays in memory: it is never stored with the job,
+// put in argv or env, or logged. The job is created as running, so the job
+// processor (which has no stdin to give) never starts it. The command runs
+// under a background context, so it outlives the request that created it.
+// If the command cannot start, the job is marked failed with the error in its
+// log, like any other job.
+func (r *Runner) CreateStdinJob(ctx context.Context, command string, args []string, stdin []byte) (*Job, error) {
+	job, err := r.createJob(ctx, command, args, nil, StatusRunning)
+	if err != nil {
+		return nil, err
+	}
+	bg := context.Background()
+	if err := r.start(bg, job.ID, stdin); err != nil {
+		_ = r.appendLog(bg, job.ID, "stderr", err.Error())
+		completedAt := time.Now()
+		exitCode := -1
+		_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+	}
+	return job, nil
+}
+
+func (r *Runner) createJob(ctx context.Context, command string, args []string, envOverrides map[string]string, status JobStatus) (*Job, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -89,7 +117,7 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 		`INSERT INTO jobs (command, args, env_overrides, status)
 		 VALUES (?, ?, ?, ?)
 		 RETURNING id`,
-		command, string(argsJSON), string(envJSON), StatusQueued,
+		command, string(argsJSON), string(envJSON), status,
 	).Scan(&jobID)
 	if err != nil {
 		return nil, fmt.Errorf("inserting job: %w", err)
@@ -99,12 +127,17 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 		ID:      jobID,
 		Command: command,
 		Args:    args,
-		Status:  StatusQueued,
+		Status:  status,
 	}, nil
 }
 
 // Start executes a job and updates its state
 func (r *Runner) Start(ctx context.Context, jobID int64) error {
+	return r.start(ctx, jobID, nil)
+}
+
+// start runs a job's command. A nil stdin gives the command an empty stdin.
+func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) error {
 	// Get job details
 	job, err := r.GetJob(ctx, jobID)
 	if err != nil {
@@ -132,6 +165,9 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 	cmd := exec.CommandContext(ctx, job.Command, job.Args...)
 	cmd.Env = env
 	cmd.Dir = r.workDir
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	// Get pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
