@@ -27,6 +27,13 @@ All notable changes to Wagon will be documented in this file.
   images to `ghcr.io/alphabravo-oss/wagon`.
 - Replaced the application logo, wordmark, and favicon with the Wagon branding.
 
+### Removed
+
+- Add Chart no longer has username/password fields, and
+  `POST /api/store/add-chart` ignores `username` and `password`. Hauler ignores
+  `--username`/`--password` on `store add chart`, and passing them exposed the
+  credentials in the process argv.
+
 ### Fixed
 
 - Starting a registry serve on an empty haul no longer fails with HTTP 500
