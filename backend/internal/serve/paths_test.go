@@ -10,10 +10,10 @@ import (
 	"testing"
 )
 
-// recordingHauler installs a fake hauler that writes its argv, one per line, to
+// argvHauler installs a fake hauler that writes its argv, one per line, to
 // a file and exits 1, and returns a func that reads that argv back ("" if
 // hauler never ran).
-func recordingHauler(t *testing.T) func() string {
+func argvHauler(t *testing.T) func() string {
 	t.Helper()
 	out := filepath.Join(t.TempDir(), "argv")
 	fakeHauler(t, `printf '%s\n' "$@" > '`+out+`'; exit 1`)
@@ -80,7 +80,7 @@ func realPath(t *testing.T, p string) string {
 func TestServe_DirectoryOutsideHaulRejected(t *testing.T) {
 	for _, ep := range serveEndpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			argv := recordingHauler(t)
+			argv := argvHauler(t)
 			e := newTestEnv(t)
 			haulDir := filepath.Dir(e.haul.StoreDir)
 			outside := t.TempDir()
@@ -139,7 +139,7 @@ func TestServe_DirectoryInsideHaulAccepted(t *testing.T) {
 				"archives":                             filepath.Join(haulDir, "archives"),
 				filepath.Join(haulDir, "a", "..", "b"): filepath.Join(haulDir, "b"),
 			} {
-				argv := recordingHauler(t)
+				argv := argvHauler(t)
 				post(e, ep, jsonBody(t, map[string]any{"directory": in}))
 				if got := argAfter(argv(), "--directory"); got != want {
 					t.Errorf("directory %q: hauler got --directory %q, want %q", in, got, want)
@@ -153,13 +153,13 @@ func TestServe_DirectoryInsideHaulAccepted(t *testing.T) {
 // fileserver gets no --directory flag (hauler's own default).
 func TestServe_DefaultDirectoryUnchanged(t *testing.T) {
 	e := newTestEnv(t)
-	argv := recordingHauler(t)
+	argv := argvHauler(t)
 	post(e, serveEndpoints[0], `{}`)
 	if got, want := argAfter(argv(), "--directory"), filepath.Join(filepath.Dir(e.haul.StoreDir), "registry"); got != want {
 		t.Errorf("registry --directory = %q, want %q", got, want)
 	}
 
-	argv = recordingHauler(t)
+	argv = argvHauler(t)
 	post(e, serveEndpoints[1], `{}`)
 	if got := argv(); got == "" || strings.Contains(got, "--directory") {
 		t.Errorf("fileserver argv = %q, want hauler to run without --directory", got)
@@ -170,7 +170,7 @@ func TestServe_DefaultDirectoryUnchanged(t *testing.T) {
 func TestServe_TLSPathsOutsideCertsRejected(t *testing.T) {
 	for _, ep := range serveEndpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			argv := recordingHauler(t)
+			argv := argvHauler(t)
 			e := newTestEnv(t)
 			certs := filepath.Join(e.cfg.DataDir, "certs")
 			if err := os.MkdirAll(filepath.Join(certs, "sub"), 0o755); err != nil {
@@ -227,7 +227,7 @@ func TestServe_TLSPathsInCertsAccepted(t *testing.T) {
 					t.Fatal(err)
 				}
 			}
-			argv := recordingHauler(t)
+			argv := argvHauler(t)
 			post(e, ep, jsonBody(t, map[string]any{"tlsCert": "my.crt", "tlsKey": filepath.Join(certs, "my.key")}))
 			got := argv()
 			if c, want := argAfter(got, "--tls-cert"), filepath.Join(realPath(t, certs), "my.crt"); c != want {
@@ -243,7 +243,7 @@ func TestServe_TLSPathsInCertsAccepted(t *testing.T) {
 // Auto TLS ignores tlsCert and tlsKey, so stray values there are not an error.
 func TestServe_AutoTLSIgnoresTLSPaths(t *testing.T) {
 	e := newTestEnv(t)
-	argv := recordingHauler(t)
+	argv := argvHauler(t)
 	post(e, serveEndpoints[1], jsonBody(t, map[string]any{"autoTls": true, "tlsCert": "/etc/passwd"}))
 	if c := argAfter(argv(), "--tls-cert"); c != filepath.Join(e.cfg.DataDir, "certs", "fileserver.crt") {
 		t.Errorf("--tls-cert = %q, want the generated fileserver cert", c)
@@ -254,7 +254,7 @@ func TestServe_AutoTLSIgnoresTLSPaths(t *testing.T) {
 func TestServe_BodyTooLarge(t *testing.T) {
 	for _, ep := range serveEndpoints {
 		t.Run(ep.name, func(t *testing.T) {
-			argv := recordingHauler(t)
+			argv := argvHauler(t)
 			e := newTestEnv(t)
 			body := `{"directory":"files","haulId":0,"pad":"` + strings.Repeat("a", 1<<20) + `"}`
 			rr := post(e, ep, body)
