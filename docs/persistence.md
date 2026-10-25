@@ -111,7 +111,16 @@ with symlinks followed. Each one must be an existing file or folder below
 Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents
 (`v1`, `v1alpha1`) of these five kinds are accepted, and a mapping may not
 repeat a key in a different case. hauler then reads a checked JSON copy of the
-manifest from `/data/tmp`, which Wagon deletes when the job ends.
+manifest from `/data/tmp`, which Wagon deletes when the job ends. Unquoted
+numbers keep their text in the copy (`version: 1.10` stays `1.10`). Copies
+left by a stop mid-job are deleted at the next start, except one a queued job
+still needs.
+
+Sync refuses `products` and `productRegistry` (HTTP 400). For each product,
+hauler pulls `<productRegistry>/hauler/<name>-manifest.yaml` and runs it
+without Wagon seeing it, so a registry the caller picks could name any host
+file. To sync a product, put its manifest in `/data/imports` and sync that
+file.
 
 ### Add File URL downloads
 

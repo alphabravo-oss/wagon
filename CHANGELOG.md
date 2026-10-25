@@ -61,6 +61,13 @@ All notable changes to Wagon will be documented in this file.
   store first. hauler now reads a checked copy of the manifest with a unique
   name, deleted when the job ends; before, the pasted-manifest file always had
   the same name and was deleted before the queued job could read it.
+  Sync also refuses `products` and `productRegistry` (HTTP 400, any key
+  casing, any value): for each product hauler pulled
+  `<productRegistry>/hauler/<name>-manifest.yaml` from a registry the caller
+  picked and ran it unchecked, which brought the host file read back. The
+  checked copy keeps unquoted numbers as written (`version: 1.10` used to
+  become `1.1`), and copies left by a stop mid-job are deleted at the next
+  start, except one a queued job still needs.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
@@ -86,6 +93,9 @@ All notable changes to Wagon will be documented in this file.
   `<data>/imports`; a relative path such as `sub/a.tar.zst` is now taken
   from `<data>/imports`. Move manifests, the files they name and archives to
   load into `<data>/imports` (see `docs/persistence.md`).
+- **Breaking:** Sync no longer takes `products` or `productRegistry`, and the
+  Sync page drops both fields. Put a product's manifest in `<data>/imports`
+  and sync that file instead.
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.

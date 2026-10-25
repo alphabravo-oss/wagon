@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"crypto/rand"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -55,22 +56,31 @@ type syncDoc struct {
 
 // checkSyncManifest checks every path a hauler sync manifest makes hauler read
 // from disk and returns the documents re-encoded as JSON, which hauler reads as
-// YAML. hauler runs as root, so a local path must be a file or folder in
-// <DataDir>/imports. Wagon hands hauler the re-encoded copy, so hauler reads
-// exactly what was checked. The error names no host path.
+// YAML, with unquoted numbers kept as written. hauler runs as root, so a local
+// path must be a file or folder in <DataDir>/imports. Wagon hands hauler the
+// re-encoded copy, so hauler reads exactly what was checked. The error names
+// no host path.
 func (h *Handler) checkSyncManifest(data []byte) ([]byte, error) {
 	var out bytes.Buffer
+	mark := "\x00wagon-number-" + rand.Text() + "\x00"
 	dec := yaml.NewDecoder(bytes.NewReader(data))
 	for n := 1; ; n++ {
+		var node yaml.Node
 		var v any
-		if err := dec.Decode(&v); errors.Is(err, io.EOF) {
+		err := dec.Decode(&node)
+		if errors.Is(err, io.EOF) {
 			break
-		} else if err != nil {
+		} else if err == nil {
+			keepNumberText(&node, mark)
+			err = node.Decode(&v)
+		}
+		if err != nil {
 			return nil, fmt.Errorf("manifest is not valid YAML: %w", err)
 		}
 		if v == nil {
 			continue
 		}
+		v = numbersFromMarks(v, mark)
 		if err := uniqueFoldedKeys(v); err != nil {
 			return nil, fmt.Errorf("manifest document %d: %w", n, err)
 		}
@@ -89,6 +99,54 @@ func (h *Handler) checkSyncManifest(data []byte) ([]byte, error) {
 		return nil, errors.New("manifest has no documents")
 	}
 	return out.Bytes(), nil
+}
+
+// keepNumberText makes each plain int or float value in n decode as mark
+// followed by its text, for numbersFromMarks to turn into a json.Number as
+// written. yaml.v3 alone decodes 1.10 as the float 1.1, and hauler would then
+// sync version "1.1". Mapping keys and anchored scalars (which an alias could
+// reuse as a key) are left as they are, as are numbers JSON cannot spell.
+func keepNumberText(n *yaml.Node, mark string) {
+	switch n.Kind {
+	case yaml.DocumentNode, yaml.SequenceNode:
+		for _, c := range n.Content {
+			keepNumberText(c, mark)
+		}
+	case yaml.MappingNode:
+		for i := 1; i < len(n.Content); i += 2 {
+			keepNumberText(n.Content[i], mark)
+		}
+	case yaml.ScalarNode:
+		tag := n.ShortTag()
+		if (tag == "!!int" || tag == "!!float") && n.Anchor == "" && n.Style&yaml.TaggedStyle == 0 && isJSONNumber(n.Value) {
+			n.Tag, n.Value = "!!str", mark+n.Value
+		}
+	}
+}
+
+// isJSONNumber reports whether s is a JSON number literal.
+func isJSONNumber(s string) bool {
+	return s != "" && (s[0] == '-' || (s[0] >= '0' && s[0] <= '9')) && json.Valid([]byte(s))
+}
+
+// numbersFromMarks replaces each string keepNumberText marked with a
+// json.Number holding the original text.
+func numbersFromMarks(v any, mark string) any {
+	switch v := v.(type) {
+	case string:
+		if num, ok := strings.CutPrefix(v, mark); ok {
+			return json.Number(num)
+		}
+	case map[string]any:
+		for k, child := range v {
+			v[k] = numbersFromMarks(child, mark)
+		}
+	case []any:
+		for i, child := range v {
+			v[i] = numbersFromMarks(child, mark)
+		}
+	}
+	return v
 }
 
 // uniqueFoldedKeys rejects a mapping with two keys that differ only in case.

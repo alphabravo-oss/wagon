@@ -23,11 +23,14 @@ type SyncRequest struct {
 	CertificateOidcIssuerRegexp string   `json:"certificateOidcIssuerRegexp,omitempty"`
 	CertificateGithubWorkflow   string   `json:"certificateGithubWorkflow,omitempty"`
 	Registry                    string   `json:"registry,omitempty"`
-	Products                    string   `json:"products,omitempty"`
-	ProductRegistry             string   `json:"productRegistry,omitempty"`
 	Rewrite                     string   `json:"rewrite,omitempty"`
 	UseTlogVerify               bool     `json:"useTlogVerify"`
 }
+
+// errProductsRemoved answers a sync request that still sends products or
+// productRegistry. For each product hauler pulls a manifest from that registry
+// and runs it unchecked, so it could name any host file.
+const errProductsRemoved = "products and productRegistry are not supported: hauler would run the product's manifest from that registry without Wagon checking it; put the manifest in Wagon's imports folder (<data>/imports) and sync it with filenames"
 
 // Sync handles POST /api/store/sync
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
@@ -37,7 +40,12 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SyncRequest
-	if !decodeStoreRequest(w, r, &req) {
+	body, ok := readStoreRequest(w, r, &req)
+	if !ok {
+		return
+	}
+	if hasField(body, "products") || hasField(body, "productRegistry") {
+		http.Error(w, errProductsRemoved, http.StatusBadRequest)
 		return
 	}
 
@@ -95,16 +103,6 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	// Optional registry override
 	if req.Registry != "" {
 		args = append(args, "--registry", req.Registry)
-	}
-
-	// Products
-	if req.Products != "" {
-		args = append(args, "--products", req.Products)
-	}
-
-	// Product registry
-	if req.ProductRegistry != "" {
-		args = append(args, "--product-registry", req.ProductRegistry)
 	}
 
 	// Optional rewrite path (experimental)

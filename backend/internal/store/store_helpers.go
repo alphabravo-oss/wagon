@@ -1,10 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -13,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
+	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
@@ -23,17 +26,41 @@ const maxStoreBody = 1 << 20
 // decodeStoreRequest reads a capped JSON body into v. It writes 413 for an
 // oversized body and 400 for invalid JSON, and reports whether v is usable.
 func decodeStoreRequest(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxStoreBody)
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+	_, ok := readStoreRequest(w, r, v)
+	return ok
+}
+
+// readStoreRequest is decodeStoreRequest that also returns the raw body.
+func readStoreRequest(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStoreBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(body)).Decode(v)
+	}
+	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			http.Error(w, fmt.Sprintf("Request body is larger than %d bytes", maxStoreBody), http.StatusRequestEntityTooLarge)
-			return false
+			return nil, false
 		}
 		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return nil, false
+	}
+	return body, true
+}
+
+// hasField reports whether the JSON object in body has the key name, matched
+// case-insensitively as encoding/json matches struct fields, whatever its value.
+func hasField(body []byte, name string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&fields); err != nil {
 		return false
 	}
-	return true
+	for key := range fields {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // rejectFlagLike prevents hauler's flag parser from reading a positional user value as a flag.
@@ -153,13 +180,45 @@ func (h *Handler) tagJobHaul(ctx context.Context, jobID, haulID int64) {
 	}
 }
 
+// syncManifestPattern names the checked manifest copies Sync hands hauler in
+// the temp folder. Boot cleanup removes any left by a stop mid-job.
+const syncManifestPattern = "sync-manifest-*.yaml"
+
+// RemoveStaleManifests deletes checked Sync manifest copies in tempDir that a
+// run which stopped before its jobs ended left behind. A copy a queued job
+// names is kept, since the dispatcher still runs that job; the next boot
+// removes it.
+func RemoveStaleManifests(ctx context.Context, runner *jobrunner.Runner, tempDir string) {
+	queued := jobrunner.StatusQueued
+	jobs, err := runner.ListJobs(ctx, &queued)
+	if err != nil {
+		log.Printf("Boot cleanup: cannot list queued jobs, keeping sync manifests: %v", err)
+		return
+	}
+	keep := map[string]bool{}
+	for _, job := range jobs {
+		for _, a := range job.Args {
+			keep[a] = true
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(tempDir, syncManifestPattern))
+	for _, m := range matches {
+		if keep[m] {
+			continue
+		}
+		if err := os.Remove(m); err == nil {
+			log.Printf("Boot cleanup: removed stale sync manifest %s", filepath.Base(m))
+		}
+	}
+}
+
 // writeTempManifest writes manifest YAML content to a new, uniquely named
 // file in the temp folder and returns its path. The caller removes it.
 func (h *Handler) writeTempManifest(yamlContent string) (string, error) {
 	if err := os.MkdirAll(h.Cfg.HaulerTempDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
-	f, err := os.CreateTemp(h.Cfg.HaulerTempDir, "sync-manifest-*.yaml")
+	f, err := os.CreateTemp(h.Cfg.HaulerTempDir, syncManifestPattern)
 	if err != nil {
 		return "", fmt.Errorf("failed to create temp manifest: %w", err)
 	}
