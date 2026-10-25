@@ -198,3 +198,7 @@ It is not for clusters:
 
 If a serve exits (for example, because its port is already in use), the page shows it as
 **crashed** with hauler's error message.
+A serve is meant to run until you stop it, so any exit you did not ask for counts as
+**crashed**, even a clean exit with status 0 (shown as `exited unexpectedly (exit status 0)`).
+If Wagon can't record a stop in its database, the stop request fails with an error and the
+serve keeps running; try again once the database is writable.
