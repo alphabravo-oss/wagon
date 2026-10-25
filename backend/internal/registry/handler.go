@@ -54,6 +54,11 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registry is required", http.StatusBadRequest)
 		return
 	}
+	if strings.HasPrefix(req.Registry, "-") {
+		// hauler would read it as a flag, not the registry positional.
+		http.Error(w, "registry must not start with '-'", http.StatusBadRequest)
+		return
+	}
 
 	if req.Username == "" {
 		http.Error(w, "username is required", http.StatusBadRequest)
@@ -115,6 +120,11 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 
 	if req.Registry == "" {
 		http.Error(w, "registry is required", http.StatusBadRequest)
+		return
+	}
+	if strings.HasPrefix(req.Registry, "-") {
+		// hauler would read it as a flag, not the registry positional.
+		http.Error(w, "registry must not start with '-'", http.StatusBadRequest)
 		return
 	}
 

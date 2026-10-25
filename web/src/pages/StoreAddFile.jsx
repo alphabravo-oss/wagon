@@ -87,13 +87,13 @@ function StoreAddFile() {
                 <label className="form-label">File Path</label>
                 <input
                   className="form-input"
-                  placeholder="/path/to/local/file.txt"
+                  placeholder="config.yaml"
                   value={filePath}
                   onChange={(e) => setFilePath(e.target.value)}
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Path to a local file on the filesystem
+                  A file in the Wagon imports folder (<code>/data/imports</code>). Put the file there first.
                 </div>
               </div>
 

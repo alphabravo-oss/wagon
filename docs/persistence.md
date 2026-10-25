@@ -55,13 +55,35 @@ Within `/data`, the following structure is created:
 /data/
 ├── hauls/
 │   └── <slug>/
-│       └── store/  # each haul's content store
+│       ├── store/      # each haul's content store
+│       ├── archives/   # saved and imported .tar.zst archives
+│       └── extracted/  # default Extract output
+├── imports/        # local files for Add File (see below)
 ├── store/          # HAULER_STORE_DIR - legacy single store
 ├── tmp/            # HAULER_TEMP_DIR - Temporary files
 ├── .docker/
 │   └── config.json # Docker registry credentials
 └── app.db          # SQLite database (jobs, settings, manifests)
 ```
+
+## Folders hauler reads from and writes to
+
+hauler runs as root in the container, so Wagon only passes it paths inside
+these folders. Any other path gets HTTP 400 before hauler starts. Relative
+paths are taken from the folder, and symlinks are resolved before the check.
+
+| Operation | Field | Allowed folder |
+|-----------|-------|----------------|
+| Add File | `filePath` | an existing file in `/data/imports` |
+| Extract | `outputDir` | a folder inside the haul's folder, outside its store; default `/data/hauls/<slug>/extracted` |
+| Copy Store | `dir://` target | a folder inside the haul's folder, outside its store |
+| Serve | `directory` | a folder inside the haul's folder, outside its store |
+| Serve | `tlsCert`, `tlsKey` | an existing file in `/data/certs` |
+
+To add a local file, put it in `/data/imports` first (with the compose file,
+that is `deploy/data/imports/` on the host), then enter its name, such as
+`config.yaml`, under **Add File**. The Add File `name` must be a plain file
+name, without `/`, `\` or `..`.
 
 ## Environment Variables
 

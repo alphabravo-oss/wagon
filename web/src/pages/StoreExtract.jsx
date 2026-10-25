@@ -156,13 +156,13 @@ function StoreExtract() {
                 <label className="form-label">Output Directory (--output)</label>
                 <input
                   className="form-input"
-                  placeholder="./output (optional)"
+                  placeholder="extracted (optional)"
                   value={outputDir}
                   onChange={(e) => setOutputDir(e.target.value)}
                   disabled={submitting}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Directory where extracted files will be saved. Defaults to current directory if not specified.
+                  A folder inside this haul folder, outside its store. Defaults to <code>extracted</code>.
                 </div>
               </div>
             </div>

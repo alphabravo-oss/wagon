@@ -1,9 +1,11 @@
 package store
 
 import (
+	"cmp"
 	"encoding/json"
 	"log"
 	"net/http"
+	"strings"
 )
 
 // AddImageRequest represents the request to add an image to the store
@@ -29,8 +31,7 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddImageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -138,8 +139,7 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddChartRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -250,8 +250,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddFileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -272,17 +271,27 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Please provide either filePath or url, not both", http.StatusBadRequest)
 		return
 	}
+	// The name becomes the file's name when hauler serves or extracts it.
+	if strings.Contains(req.Name, "..") || strings.ContainsAny(req.Name, "/\\") {
+		http.Error(w, "name must be a plain file name, without '/', '\\' or '..'", http.StatusBadRequest)
+		return
+	}
+
+	// Determine the file source. A local path must be in the imports folder.
+	fileSource := req.URL
+	if req.FilePath != "" {
+		resolved, err := h.importFile(req.FilePath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fileSource = resolved
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
 		http.Error(w, "Failed to resolve haul: "+err.Error(), http.StatusBadRequest)
 		return
-	}
-
-	// Determine the file source
-	fileSource := req.FilePath
-	if fileSource == "" {
-		fileSource = req.URL
 	}
 
 	// Build args for hauler store add file command
@@ -311,7 +320,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"jobId":   job.ID,
 		"message": "Add file job started",
-		"file":    fileSource,
+		"file":    cmp.Or(req.FilePath, req.URL),
 		"haulId":  haul.ID,
 	})
 }

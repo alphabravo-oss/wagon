@@ -281,7 +281,7 @@ func TestCopyHandler_ValidDirTarget(t *testing.T) {
 	handler, db := setupTestHandler(t)
 
 	req := CopyRequest{
-		Target: "dir:///data/export",
+		Target: "dir://export",
 	}
 	body, _ := json.Marshal(req)
 
@@ -312,7 +312,9 @@ func TestCopyHandler_ValidDirTarget(t *testing.T) {
 		t.Fatalf("getting job: %v", err)
 	}
 
-	expectedArgs := []string{"store", "copy", "dir:///data/export", "--store", defaultStoreDir(t, handler)}
+	// A relative dir:// target is taken from the haul's folder.
+	export := filepath.Join(realDir(t, filepath.Dir(defaultStoreDir(t, handler))), "export")
+	expectedArgs := []string{"store", "copy", "dir://" + export, "--store", defaultStoreDir(t, handler)}
 	if len(job.Args) != len(expectedArgs) {
 		t.Errorf("expected %d args, got %d (%v)", len(expectedArgs), len(job.Args), job.Args)
 	} else {

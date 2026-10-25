@@ -17,6 +17,20 @@ All notable changes to Wagon will be documented in this file.
 - Store endpoints reject values that hauler takes as positional arguments
   (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
   they start with `-`, with HTTP 400.
+- Store operations no longer let a signed-in user make hauler, which runs as
+  root, read or write any host path. `filePath` on `POST /api/store/add-file`
+  must be a file in `<data>/imports`; before, `/etc/shadow` or `app.db` could be
+  added to the store and served on the unauthenticated serve port. `outputDir`
+  on `POST /api/store/extract` and a `dir://` target on `POST /api/store/copy`
+  must be folders inside the haul's own folder, outside its store; before,
+  `{"outputDir":"/etc/cron.d"}` wrote artifact content there as root. Extract
+  without `outputDir` now writes to `<haul>/extracted` instead of the data
+  folder itself. The add-file `name` must not contain `/`, `\` or `..`. All of
+  these get HTTP 400 before hauler starts. Local files for Add File now go in
+  `<data>/imports` first (see `docs/persistence.md`).
+- Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
+  JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
+  messages no longer include absolute data-folder paths.
 
 ### Changed — secure defaults (breaking)
 
