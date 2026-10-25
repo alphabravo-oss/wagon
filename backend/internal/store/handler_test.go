@@ -5,17 +5,22 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	_ "modernc.org/sqlite"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
+	"github.com/alphabravo-oss/wagon/backend/internal/safefetch"
 )
 
 func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
@@ -97,8 +102,35 @@ func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
 		t.Fatalf("ensuring default haul: %v", err)
 	}
 	handler := NewHandler(runner, cfg, haulSvc)
+	// Tests never reach the network: names do not resolve unless a test swaps
+	// in its own Fetcher.
+	handler.Fetcher = safefetch.New(safefetch.Options{
+		Lookup: func(context.Context, string) ([]netip.Addr, error) {
+			return nil, errors.New("no DNS in tests")
+		},
+		Dial: func(context.Context, string, string) (net.Conn, error) {
+			return nil, errors.New("no network in tests")
+		},
+	})
+	// Add File url jobs download in the background; let them end before the
+	// temp folder and database go away.
+	t.Cleanup(func() { waitJobsDone(t, db) })
 
 	return handler, db
+}
+
+// waitJobsDone waits until no job is running.
+func waitJobsDone(t *testing.T, db *sql.DB) {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		var n int
+		if err := db.QueryRow("SELECT COUNT(*) FROM jobs WHERE status = 'running'").Scan(&n); err != nil || n == 0 {
+			return
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Errorf("jobs still running after 10s")
 }
 
 // defaultStoreDir returns the store directory of the default haul created by

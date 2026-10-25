@@ -105,16 +105,69 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 
 // Start executes a job and updates its state
 func (r *Runner) Start(ctx context.Context, jobID int64) error {
+	_, err := r.start(ctx, jobID)
+	return err
+}
+
+// Prepare is Go-side work a prepared job does before its command runs, such as
+// a download. logf adds a line to the job's log. An error fails the job without
+// running the command.
+type Prepare func(ctx context.Context, logf func(string)) error
+
+// CreatePreparedJob creates a job that runs prepare and then the command. The
+// job is "running" from the start, so the job processor never starts it; it
+// still counts towards the concurrency limit. cleanup, if not nil, runs once the
+// job has ended, whether it succeeded or not.
+func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []string, prepare Prepare, cleanup func()) (*Job, error) {
+	job, err := r.CreateJob(ctx, command, args, nil)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := r.updateStatus(ctx, job.ID, StatusRunning, &now, nil, nil); err != nil {
+		return nil, fmt.Errorf("updating status to running: %w", err)
+	}
+	job.Status = StatusRunning
+
+	go func() {
+		if cleanup != nil {
+			defer cleanup()
+		}
+		bg := context.Background()
+		fail := func(msg string) {
+			_ = r.appendLog(bg, job.ID, "stderr", msg)
+			completedAt := time.Now()
+			exitCode := -1
+			_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+		}
+		logf := func(msg string) { _ = r.appendLog(bg, job.ID, "stdout", msg) }
+		if err := prepare(bg, logf); err != nil {
+			fail(err.Error())
+			return
+		}
+		done, err := r.start(bg, job.ID)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		<-done
+	}()
+	return job, nil
+}
+
+// start runs a job's command. The returned channel is closed once the command
+// has exited and its final status is stored.
+func (r *Runner) start(ctx context.Context, jobID int64) (<-chan struct{}, error) {
 	// Get job details
 	job, err := r.GetJob(ctx, jobID)
 	if err != nil {
-		return fmt.Errorf("getting job: %w", err)
+		return nil, fmt.Errorf("getting job: %w", err)
 	}
 
 	// Update status to running
 	now := time.Now()
 	if err := r.updateStatus(ctx, jobID, StatusRunning, &now, nil, nil); err != nil {
-		return fmt.Errorf("updating status to running: %w", err)
+		return nil, fmt.Errorf("updating status to running: %w", err)
 	}
 
 	// Build environment - start with current env and add overrides
@@ -136,12 +189,12 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 	// Get pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("creating stdout pipe: %w", err)
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("creating stderr pipe: %w", err)
+		return nil, fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	// Start the command
@@ -149,7 +202,7 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 		completedAt := time.Now()
 		exitCode := -1
 		_ = r.updateStatus(ctx, jobID, StatusFailed, &now, &completedAt, &exitCode)
-		return fmt.Errorf("starting command: %w", err)
+		return nil, fmt.Errorf("starting command: %w", err)
 	}
 
 	// Both pipes must be fully drained BEFORE cmd.Wait() runs: os/exec closes the
@@ -167,12 +220,14 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 		r.streamOutput(ctx, jobID, stderr, "stderr")
 	}()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		streams.Wait()
 		r.monitorCompletion(ctx, jobID, cmd)
 	}()
 
-	return nil
+	return done, nil
 }
 
 // monitorCompletion waits for the command to finish and updates the job status

@@ -131,7 +131,8 @@ function StoreAddFile() {
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  An <code>http://</code> or <code>https://</code> URL to download
+                  An <code>http://</code> or <code>https://</code> URL. Wagon downloads it itself and refuses
+                  loopback, link-local and private addresses unless the admin allows them.
                 </div>
               </div>
 
@@ -145,7 +146,8 @@ function StoreAddFile() {
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Rewrite the name of the file when storing (defaults to original filename)
+                  Rewrite the name of the file when storing (defaults to the last part of the URL path).
+                  Required when the URL path has no file name.
                 </div>
               </div>
 

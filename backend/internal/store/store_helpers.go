@@ -62,14 +62,51 @@ func (h *Handler) importFile(p string) (string, error) {
 }
 
 // remoteFileURL checks that an add-file url is an http or https URL with a
-// host. hauler reads anything else, such as a bare path or file://, from the
-// host as root.
-func remoteFileURL(raw string) error {
+// host. Wagon downloads it itself (see fetchTempFile); hauler never sees it.
+func remoteFileURL(raw string) (*url.URL, error) {
 	u, err := url.Parse(raw)
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
-		return errors.New("url must be an http:// or https:// URL with a host; put local files in Wagon's imports folder and use filePath")
+		return nil, errors.New("url must be an http:// or https:// URL with a host; put local files in Wagon's imports folder and use filePath")
 	}
-	return nil
+	return u, nil
+}
+
+// validFileName is the add-file name rule: a single path element, so hauler
+// serves and extracts it inside its output folder.
+func validFileName(name string) bool {
+	return name != "" && name != "." && name != ".." && !strings.ContainsAny(name, "/\\")
+}
+
+// fetchTempPrefix names the files url downloads are written to in the imports
+// folder. Boot cleanup removes any left by a crash.
+const fetchTempPrefix = ".wagon-fetch-"
+
+// fetchTempFile creates an empty file in <DataDir>/imports for a url download.
+// The error names no host path.
+func (h *Handler) fetchTempFile() (string, error) {
+	dir := filepath.Join(h.Cfg.DataDir, "imports")
+	if err := os.MkdirAll(dir, 0755); err != nil {
+		log.Printf("Error creating imports directory: %v", err)
+		return "", errors.New("imports folder is unavailable")
+	}
+	f, err := os.CreateTemp(dir, fetchTempPrefix+"*")
+	if err != nil {
+		log.Printf("Error creating download file: %v", err)
+		return "", errors.New("cannot create a file for the download in the imports folder")
+	}
+	_ = f.Close()
+	return f.Name(), nil
+}
+
+// RemoveStaleDownloads deletes url download files left in <dataDir>/imports
+// by a run that stopped mid-download.
+func RemoveStaleDownloads(dataDir string) {
+	matches, _ := filepath.Glob(filepath.Join(dataDir, "imports", fetchTempPrefix+"*"))
+	for _, m := range matches {
+		if err := os.Remove(m); err == nil {
+			log.Printf("Boot cleanup: removed stale download %s", filepath.Base(m))
+		}
+	}
 }
 
 // haulOutputDir confines a folder hauler writes into (extract output, dir://

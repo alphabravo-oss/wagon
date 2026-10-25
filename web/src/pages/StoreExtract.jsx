@@ -162,7 +162,7 @@ function StoreExtract() {
                   disabled={submitting}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  A folder inside this haul folder, outside its store. Defaults to <code>extracted</code>.
+                  A folder inside this haul folder, outside its store, archives and registry folders. Defaults to <code>extracted</code>.
                 </div>
               </div>
             </div>

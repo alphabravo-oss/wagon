@@ -4,12 +4,18 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
+	"net"
 	"net/http"
 	"net/http/httptest"
+	"net/netip"
 	"os"
 	"path/filepath"
 	"strings"
 	"testing"
+
+	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
+	"github.com/alphabravo-oss/wagon/backend/internal/safefetch"
 )
 
 func postStore(h *Handler, endpoint, body string) *httptest.ResponseRecorder {
@@ -160,17 +166,139 @@ func TestAddFile_URLNotRemoteRejected(t *testing.T) {
 	}
 }
 
-func TestAddFile_URLRemoteAccepted(t *testing.T) {
-	for _, u := range []string{"https://example.com/f.txt", "http://10.0.0.5:8080/a/b?x=1", "HTTPS://example.com/f"} {
+// hauler never gets a url. Its file getter opened filepath.Join(host, path)
+// for http(s) URLs such as http://x/../../etc/host_secret.txt, so Wagon
+// downloads the url itself and passes hauler the downloaded file.
+func TestAddFile_URLNeverReachesHauler(t *testing.T) {
+	for _, tc := range []struct{ url, name, wantName string }{
+		{"https://example.com/f.txt", "", "f.txt"},
+		{"http://10.0.0.5:8080/a/b?x=1", "", "b"},
+		{"HTTPS://example.com/f", "renamed.txt", "renamed.txt"},
+		{"http://x/../../etc/host_secret.txt", "", "host_secret.txt"},
+		{"http://example.com/..%2f..%2fetc%2fpasswd", "", "passwd"},
+		{"http://.docker", "a.txt", "a.txt"},
+		{"http://app.db", "a.txt", "a.txt"},
+		{"http://127.0.0.1:8090/f.txt", "", "f.txt"},
+	} {
 		h, db := setupTestHandler(t)
-		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": u}))
+		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": tc.url, "name": tc.name}))
 		if w.Code != http.StatusAccepted {
-			t.Fatalf("%q: status %d body %q", u, w.Code, w.Body.String())
+			t.Fatalf("%q: status %d body %q", tc.url, w.Code, w.Body.String())
 		}
-		if args := onlyJobArgs(t, h, db); args[3] != u {
-			t.Errorf("%q: hauler got %q", u, args[3])
+		args := onlyJobArgs(t, h, db)
+		imports := filepath.Join(h.Cfg.DataDir, "imports")
+		if filepath.Dir(args[3]) != imports || !strings.HasPrefix(filepath.Base(args[3]), fetchTempPrefix) {
+			t.Errorf("%q: hauler got %q, want a download file in imports", tc.url, args[3])
+		}
+		if args[4] != "--name" || args[5] != tc.wantName {
+			t.Errorf("%q: name args %q, want --name %q", tc.url, args[4:6], tc.wantName)
+		}
+		for _, a := range args {
+			if strings.Contains(a, "://") {
+				t.Errorf("%q: hauler args contain a url: %q", tc.url, args)
+			}
+		}
+		// The test fetcher has no network, so the download fails, the job
+		// fails before hauler runs, and the download file is removed.
+		job := waitJob(t, h, db)
+		if job.Status != jobrunner.StatusFailed || !jobLogContains(t, h, job.ID, "download failed") {
+			t.Errorf("%q: job %s, want failed with a download error", tc.url, job.Status)
+		}
+		if _, err := os.Stat(args[3]); !os.IsNotExist(err) {
+			t.Errorf("%q: download file left behind: %v", tc.url, err)
 		}
 	}
+}
+
+// A url whose path has no file name needs an explicit name.
+func TestAddFile_URLWithoutFileNameNeedsName(t *testing.T) {
+	for _, u := range []string{"http://.docker", "http://app.db", "https://example.com/", "https://example.com/a/.."} {
+		h, db := setupTestHandler(t)
+		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": u}))
+		expectRefused(t, w, db, h.Cfg.DataDir, u, "name is required")
+	}
+}
+
+// End to end with a fake hauler: Wagon downloads through its own fetcher,
+// hauler gets the local copy, and the copy is removed afterwards.
+func TestAddFile_URLDownloadedThenAdded(t *testing.T) {
+	remote := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		_, _ = w.Write([]byte("REMOTE-BODY"))
+	}))
+	t.Cleanup(remote.Close)
+
+	bin, out := t.TempDir(), t.TempDir()
+	script := "#!/bin/sh\ncp \"$4\" \"$FAKE_HAULER_OUT/got\"\necho \"$@\" > \"$FAKE_HAULER_OUT/args\"\n"
+	if err := os.WriteFile(filepath.Join(bin, "hauler"), []byte(script), 0755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+	t.Setenv("FAKE_HAULER_OUT", out)
+
+	h, db := setupTestHandler(t)
+	h.Fetcher = safefetch.New(safefetch.Options{
+		Lookup: func(_ context.Context, host string) ([]netip.Addr, error) {
+			if host != "files.example" {
+				return nil, errors.New("no such host")
+			}
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
+		},
+		Dial: func(ctx context.Context, network, address string) (net.Conn, error) {
+			if address != "93.184.216.34:80" {
+				return nil, errors.New("unexpected address " + address)
+			}
+			var d net.Dialer
+			return d.DialContext(ctx, network, remote.Listener.Addr().String())
+		},
+	})
+
+	w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": "http://files.example/dist/tool.tgz"}))
+	if w.Code != http.StatusAccepted {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+	args := onlyJobArgs(t, h, db)
+	job := waitJob(t, h, db)
+	if job.Status != jobrunner.StatusSucceeded {
+		t.Fatalf("job %s, want succeeded", job.Status)
+	}
+	if got, _ := os.ReadFile(filepath.Join(out, "got")); string(got) != "REMOTE-BODY" {
+		t.Errorf("hauler read %q, want the downloaded body", got)
+	}
+	if got, _ := os.ReadFile(filepath.Join(out, "args")); !strings.Contains(string(got), "--name tool.tgz") {
+		t.Errorf("hauler args %q, want --name tool.tgz", got)
+	}
+	if _, err := os.Stat(args[3]); !os.IsNotExist(err) {
+		t.Errorf("download file left behind: %v", err)
+	}
+}
+
+// waitJob waits for the single job to end and returns it.
+func waitJob(t *testing.T, h *Handler, db *sql.DB) *jobrunner.Job {
+	t.Helper()
+	waitJobsDone(t, db)
+	var id int64
+	if err := db.QueryRow("SELECT id FROM jobs").Scan(&id); err != nil {
+		t.Fatal(err)
+	}
+	job, err := h.JobRunner.GetJob(context.Background(), id)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return job
+}
+
+func jobLogContains(t *testing.T, h *Handler, jobID int64, want string) bool {
+	t.Helper()
+	logs, err := h.JobRunner.GetLogs(context.Background(), jobID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range logs {
+		if strings.Contains(l.Content, want) {
+			return true
+		}
+	}
+	return false
 }
 
 // The add-file name becomes a file name when hauler serves or extracts it.

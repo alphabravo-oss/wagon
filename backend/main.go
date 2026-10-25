@@ -140,6 +140,7 @@ func main() {
 
 	// Reset state left over from a previous run before anything starts.
 	cleanupOnBoot(db.DB)
+	store.RemoveStaleDownloads(cfg.DataDir)
 
 	// Initialize job runner
 	jobRunner := jobrunner.New(db.DB, cfg.DataDir)

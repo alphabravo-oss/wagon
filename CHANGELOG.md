@@ -17,12 +17,16 @@ All notable changes to Wagon will be documented in this file.
 - Store endpoints reject values that hauler takes as positional arguments
   (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
   they start with `-`, with HTTP 400.
-- Store operations no longer let a signed-in user make hauler, which runs as
-  root, read or write any host path. `filePath` on `POST /api/store/add-file`
-  must be a file in `<data>/imports`, and `url` must be an `http://` or
-  `https://` URL with a host; before, `/etc/shadow` or `app.db` could be added
-  to the store through either field (`url` also took bare paths and `file://`)
-  and served on the unauthenticated serve port. `outputDir` on
+- Add File, Extract and Copy no longer let a signed-in user make hauler,
+  which runs as root, read or write any host path. `filePath` on
+  `POST /api/store/add-file` must be a file in `<data>/imports`; before,
+  `/etc/shadow` or `app.db` could be added to the store and served on the
+  unauthenticated serve port. `url` must be an `http://` or `https://` URL
+  with a host, and Wagon now downloads it itself and gives hauler only the
+  downloaded file: hauler's file getter opened `filepath.Join(host, path)`
+  on disk whatever the scheme, so `http://x/../../etc/host_secret.txt`,
+  `http://app.db` and `http://.docker` read host files (`url` also took bare
+  paths and `file://`). `outputDir` on
   `POST /api/store/extract` and a `dir://` target on `POST /api/store/copy`
   must be folders inside the haul's own folder, outside its `store`, `archives`
   and `registry` folders; before, `{"outputDir":"/etc/cron.d"}` wrote artifact
@@ -31,6 +35,17 @@ All notable changes to Wagon will be documented in this file.
   must not contain `/` or `\` and must not be `.` or `..`. All of these get
   HTTP 400 before hauler starts. Local files for Add File now go in
   `<data>/imports` first (see `docs/persistence.md`).
+- Add File `url` downloads can no longer reach Wagon's host or internal
+  network (SSRF). Every connection, including each redirect hop, is checked
+  against its resolved address. Loopback, link-local (including the
+  `169.254.169.254` cloud metadata address), unspecified, multicast and
+  reserved addresses are always refused. Private ranges (RFC 1918, CGNAT
+  `100.64.0.0/10`, IPv6 `fc00::/7`) are refused unless listed in the new
+  `HAULER_UI_FETCH_ALLOW_CIDRS`. Downloads are capped at
+  `HAULER_UI_FETCH_MAX_BYTES` (default 2 GiB) and `HAULER_UI_FETCH_TIMEOUT`
+  (default `30m`), and only `http` and `https` are followed. Before, a
+  signed-in user could make Wagon fetch the metadata service or other
+  internal hosts and serve the response from the store.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
@@ -38,9 +53,12 @@ All notable changes to Wagon will be documented in this file.
 ### Changed — secure defaults (breaking)
 
 - Add File takes local files only from `<data>/imports`, and its `url` only as
-  `http://` or `https://`. Extract and Copy write only inside the haul's folder,
-  and Extract without `outputDir` writes to `<haul>/extracted`. Requests that
-  used other paths now get HTTP 400 (see Security above).
+  `http://` or `https://`. Wagon downloads the url itself, directly: it
+  ignores `HTTP_PROXY`/`HTTPS_PROXY`, refuses private addresses unless
+  `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and needs a `name` when the URL
+  path has no file name (HTTP 400). Extract and Copy write only inside the
+  haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
+  Requests that used other paths now get HTTP 400 (see Security above).
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.
