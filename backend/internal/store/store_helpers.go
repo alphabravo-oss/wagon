@@ -2,7 +2,6 @@ package store
 
 import (
 	"context"
-	"encoding/json"
 	"errors"
 	"fmt"
 	"log"
@@ -13,6 +12,7 @@ import (
 	"strings"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
+	"github.com/alphabravo-oss/wagon/backend/internal/httpjson"
 	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
@@ -23,17 +23,7 @@ const maxStoreBody = 1 << 20
 // decodeStoreRequest reads a capped JSON body into v. It writes 413 for an
 // oversized body and 400 for invalid JSON, and reports whether v is usable.
 func decodeStoreRequest(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxStoreBody)
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
-		var tooBig *http.MaxBytesError
-		if errors.As(err, &tooBig) {
-			http.Error(w, fmt.Sprintf("Request body is larger than %d bytes", maxStoreBody), http.StatusRequestEntityTooLarge)
-			return false
-		}
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
-		return false
-	}
-	return true
+	return httpjson.Decode(w, r, v, maxStoreBody)
 }
 
 // rejectFlagLike prevents hauler's flag parser from reading a positional user value as a flag.

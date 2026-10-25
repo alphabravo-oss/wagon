@@ -54,6 +54,9 @@ type Runner struct {
 	db      *sql.DB
 	workDir string
 	mu      sync.Mutex
+
+	stopMu sync.Mutex
+	stops  map[int64]context.CancelFunc // stops a running job's prepare or command, for cleanup
 }
 
 // New creates a new job runner. workDir is the working directory jobs run in;
@@ -162,6 +165,12 @@ func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []s
 			defer cleanup()
 		}
 		bg := context.Background()
+		// Cleanup cancels jobCtx: it stops prepare, and start refuses to run
+		// the command on a cancelled ctx, so a cleaned-up job never starts later.
+		jobCtx, cancel := context.WithCancel(bg)
+		defer cancel()
+		r.setStop(job.ID, cancel)
+		defer r.setStop(job.ID, nil)
 		fail := func(msg string) {
 			_ = r.appendLog(bg, job.ID, "stderr", msg)
 			completedAt := time.Now()
@@ -169,11 +178,11 @@ func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []s
 			_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
 		}
 		logf := func(msg string) { _ = r.appendLog(bg, job.ID, "stdout", msg) }
-		if err := prepare(bg, logf); err != nil {
+		if err := prepare(jobCtx, logf); err != nil {
 			fail(err.Error())
 			return
 		}
-		done, err := r.start(bg, job.ID, nil)
+		done, err := r.start(jobCtx, job.ID, nil)
 		if err != nil {
 			fail(err.Error())
 			return
@@ -210,8 +219,9 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 		env = baseEnv
 	}
 
-	// Create command
-	cmd := exec.CommandContext(ctx, job.Command, job.Args...)
+	// Create command. Its own ctx lets cleanup kill it (stopJob).
+	cmdCtx, stop := context.WithCancel(ctx)
+	cmd := exec.CommandContext(cmdCtx, job.Command, job.Args...)
 	cmd.Env = env
 	cmd.Dir = r.workDir
 	if stdin != nil {
@@ -221,21 +231,25 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 	// Get pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
+		stop()
 		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
+		stop()
 		return nil, fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	// Start the command
 	if err := cmd.Start(); err != nil {
+		stop()
 		completedAt := time.Now()
 		exitCode := -1
 		_ = r.updateStatus(ctx, jobID, StatusFailed, &now, &completedAt, &exitCode)
 		return nil, fmt.Errorf("starting command: %w", err)
 	}
+	r.setStop(jobID, stop)
 
 	// Both pipes must be fully drained BEFORE cmd.Wait() runs: os/exec closes the
 	// pipes once the process is reaped, so calling Wait() first races the readers
@@ -255,6 +269,7 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 	done := make(chan struct{})
 	go func() {
 		defer close(done)
+		defer stop()
 		streams.Wait()
 		r.monitorCompletion(ctx, jobID, cmd)
 	}()
@@ -265,6 +280,7 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 // monitorCompletion waits for the command to finish and updates the job status
 func (r *Runner) monitorCompletion(ctx context.Context, jobID int64, cmd *exec.Cmd) {
 	err := cmd.Wait()
+	r.setStop(jobID, nil)
 
 	completedAt := time.Now()
 	var status JobStatus
@@ -288,6 +304,30 @@ func (r *Runner) monitorCompletion(ctx context.Context, jobID int64, cmd *exec.C
 	}
 
 	_ = r.updateStatus(ctx, jobID, status, nil, &completedAt, exitCode)
+}
+
+// setStop records how to stop a running job, or forgets it when stop is nil.
+func (r *Runner) setStop(jobID int64, stop context.CancelFunc) {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	if stop == nil {
+		delete(r.stops, jobID)
+		return
+	}
+	if r.stops == nil {
+		r.stops = make(map[int64]context.CancelFunc)
+	}
+	r.stops[jobID] = stop
+}
+
+// stopJob stops a job that is running in this process: it cancels a prepared
+// job's prepare step, or kills its command.
+func (r *Runner) stopJob(jobID int64) {
+	r.stopMu.Lock()
+	defer r.stopMu.Unlock()
+	if stop := r.stops[jobID]; stop != nil {
+		stop()
+	}
 }
 
 const maxLogLineBytes = 64 * 1024
