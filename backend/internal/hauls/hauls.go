@@ -6,7 +6,9 @@ package hauls
 import (
 	"context"
 	"database/sql"
+	"errors"
 	"fmt"
+	"io/fs"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -147,7 +149,7 @@ func (s *Service) Create(ctx context.Context, name, description string) (*Haul, 
 
 	storeDir := filepath.Join(s.baseDir(), slug, "store")
 	archivesDir := filepath.Join(s.baseDir(), slug, "archives")
-	if err := initStoreDir(storeDir); err != nil {
+	if err := EnsureStoreLayout(storeDir); err != nil {
 		return nil, fmt.Errorf("initializing store directory: %w", err)
 	}
 	if err := os.MkdirAll(archivesDir, 0755); err != nil {
@@ -211,17 +213,34 @@ func (s *Service) Delete(ctx context.Context, id int64) error {
 	return nil
 }
 
-// initStoreDir creates an empty OCI layout so hauler can operate on a fresh haul.
-func initStoreDir(storeDir string) error {
+// EnsureStoreLayout makes storeDir a complete OCI layout, creating an empty one
+// for a fresh haul. It only adds missing files, never overwrites existing ones.
+// hauler's registry serve fails on a store without index.json, and hauls created
+// by older Wagon versions have none until content is added.
+func EnsureStoreLayout(storeDir string) error {
 	blobsDir := filepath.Join(storeDir, "blobs", "sha256")
 	if err := os.MkdirAll(blobsDir, 0755); err != nil {
 		return err
 	}
-	ociLayoutPath := filepath.Join(storeDir, "oci-layout")
-	if _, err := os.Stat(ociLayoutPath); os.IsNotExist(err) {
-		if err := os.WriteFile(ociLayoutPath, []byte(`{"imageLayoutVersion": "1.0.0"}`), 0644); err != nil {
-			return err
-		}
+	if err := writeIfMissing(filepath.Join(storeDir, "oci-layout"), `{"imageLayoutVersion": "1.0.0"}`); err != nil {
+		return err
 	}
-	return nil
+	return writeIfMissing(filepath.Join(storeDir, "index.json"), `{"schemaVersion":2,"manifests":[]}`)
+}
+
+// writeIfMissing creates path with data unless it already exists. O_EXCL keeps
+// a concurrent hauler write from being overwritten.
+func writeIfMissing(path, data string) error {
+	f, err := os.OpenFile(path, os.O_WRONLY|os.O_CREATE|os.O_EXCL, 0644)
+	if errors.Is(err, fs.ErrExist) {
+		return nil
+	}
+	if err != nil {
+		return err
+	}
+	if _, err := f.WriteString(data); err != nil {
+		_ = f.Close()
+		return err
+	}
+	return f.Close()
 }

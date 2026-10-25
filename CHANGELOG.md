@@ -27,6 +27,16 @@ All notable changes to Wagon will be documented in this file.
   images to `ghcr.io/alphabravo-oss/wagon`.
 - Replaced the application logo, wordmark, and favicon with the Wagon branding.
 
+### Fixed
+
+- Starting a registry serve on an empty haul no longer fails with HTTP 500
+  (`stat …/index.json: no such file or directory`); it starts with an empty
+  catalog. New hauls get an empty `index.json`, and existing empty hauls get one
+  when a registry serve starts.
+- `POST /api/serve/registry` without a `readonly` field now starts a read-only
+  registry. Pushes need `"readonly": false` explicitly (the Serve page always
+  sends the field, so it is unaffected).
+
 ## [0.1.0] - 2026-07-11
 
 First tagged release. Finalizes the multi-haul + publish work and adds a round
