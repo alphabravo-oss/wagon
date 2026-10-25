@@ -224,8 +224,10 @@ be published from the container:
   registry (`-p 127.0.0.1:5002:5002`) and 5001 for the fileserver
   (`-p 127.0.0.1:5001:5001`).
 
-The Compose file publishes 8080, 5000 and 5001 on `HAULER_UI_BIND_ADDR`
-(default `127.0.0.1`).
+The Compose file publishes `PORT` (default 8080), `HAULER_UI_REGISTRY_PORT`
+(default 5000) and the Serve defaults 5002 and 5001 on `HAULER_UI_BIND_ADDR`
+(default `127.0.0.1`). A Serve port other than 5002 or 5001 needs its own line
+under `ports:`.
 
 If the Serve page shows a process as **crashed**, the message under it is
 hauler's last error. For example, `bind: address already in use` means the port
