@@ -38,6 +38,10 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "imageRef is required", http.StatusBadRequest)
 		return
 	}
+	if err := rejectFlagLike("imageRef", req.ImageRef); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
@@ -141,6 +145,10 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 
 	if req.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("name", req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -250,6 +258,14 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	// Validate that either filePath or URL is provided (mutually exclusive)
 	if req.FilePath == "" && req.URL == "" {
 		http.Error(w, "Either filePath or url is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("filePath", req.FilePath); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("url", req.URL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 	if req.FilePath != "" && req.URL != "" {

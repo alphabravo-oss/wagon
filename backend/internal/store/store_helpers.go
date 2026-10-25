@@ -6,9 +6,18 @@ import (
 	"log"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 )
+
+// rejectFlagLike prevents hauler's flag parser from reading a positional user value as a flag.
+func rejectFlagLike(field, value string) error {
+	if strings.HasPrefix(value, "-") {
+		return fmt.Errorf("%s must not start with '-'", field)
+	}
+	return nil
+}
 
 // resolveHaul returns the haul a request targets. When haulID is 0 it falls back
 // to the default haul. It also returns the "--store <dir>" args that scope a

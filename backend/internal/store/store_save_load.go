@@ -163,6 +163,10 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "artifactRef is required", http.StatusBadRequest)
 		return
 	}
+	if err := rejectFlagLike("artifactRef", req.ArtifactRef); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
