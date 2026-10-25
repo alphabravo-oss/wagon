@@ -29,7 +29,6 @@ function Serve() {
   const [registryTlsCert, setRegistryTlsCert] = useState('')
   const [registryTlsKey, setRegistryTlsKey] = useState('')
   const [registryDirectory, setRegistryDirectory] = useState('')
-  const [registryConfigFile, setRegistryConfigFile] = useState('')
   const [registryShowAdvanced, setRegistryShowAdvanced] = useState(false)
   const [registryProcesses, setRegistryProcesses] = useState([])
   const [registryLoading, setRegistryLoading] = useState(true)
@@ -109,7 +108,6 @@ function Serve() {
         tlsKey: registryAutoTls ? undefined : (registryTlsKey || undefined),
         autoTls: registryAutoTls || undefined,
         directory: registryDirectory || undefined,
-        configFile: registryConfigFile || undefined,
       }
 
       Object.keys(requestPayload).forEach(key => {
@@ -355,17 +353,6 @@ function Serve() {
                       placeholder="/path/to/store"
                       value={registryDirectory}
                       onChange={(e) => setRegistryDirectory(e.target.value)}
-                      disabled={submitting}
-                    />
-                  </div>
-
-                  <div className="form-group">
-                    <label className="form-label">Config File</label>
-                    <input
-                      className="form-input"
-                      placeholder="/path/to/config.yaml"
-                      value={registryConfigFile}
-                      onChange={(e) => setRegistryConfigFile(e.target.value)}
                       disabled={submitting}
                     />
                   </div>
