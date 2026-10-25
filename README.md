@@ -78,10 +78,20 @@ cp deploy/.env.example deploy/.env
 docker compose -f deploy/docker-compose.yml up -d --build
 ```
 
-The compose file builds the image from this checkout. It publishes 8080, 5000
-and 5001 on `127.0.0.1`, and keeps data in `deploy/data/` (a host directory,
-not a named volume). Every setting in `deploy/.env` is passed to the container
-(this needs Docker Compose v2.24 or newer). If `deploy/.env` is missing or
+The compose file builds the image from this checkout. It publishes these ports
+on `127.0.0.1` and keeps data in `deploy/data/` (a host directory, not a named
+volume):
+
+- `PORT` (default 8080): the web UI and API.
+- `HAULER_UI_REGISTRY_PORT` (default 5000): the Publishing front door.
+- 5002 and 5001: the Serve page's default registry and fileserver ports. To
+  serve on another port, add it to `ports:` in `deploy/docker-compose.yml`.
+
+Set `PORT` or `HAULER_UI_REGISTRY_PORT` in `deploy/.env` to move a port. The
+same number is used on the host and inside the container.
+
+Every setting in `deploy/.env` is passed to the container (this needs Docker
+Compose v2.24 or newer). If `deploy/.env` is missing or
 `HAULER_UI_PASSWORD` is left empty, Wagon exits with a password error.
 
 The whole `deploy/.env` file is passed into the container, so don't keep
