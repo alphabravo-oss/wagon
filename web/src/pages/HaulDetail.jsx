@@ -25,7 +25,7 @@ const TABS = [
   { id: 'contents', label: 'Contents' },
   { id: 'add', label: 'Add Content' },
   { id: 'archives', label: 'Archives' },
-  { id: 'serve', label: 'Publish' },
+  { id: 'serve', label: 'Client Access' },
 ]
 
 function HaulDetail() {
@@ -136,7 +136,7 @@ function OverviewTab({ haul, onGo }) {
           <button className="btn" onClick={() => onGo('add')}><Image size={15} style={{ marginRight: '0.3rem' }} />Add Content</button>
           <button className="btn" onClick={() => onGo('contents')}><Package size={15} style={{ marginRight: '0.3rem' }} />View Contents</button>
           <button className="btn" onClick={() => onGo('archives')}><FileArchive size={15} style={{ marginRight: '0.3rem' }} />Build / Archives</button>
-          <button className="btn" onClick={() => onGo('serve')}><Globe size={15} style={{ marginRight: '0.3rem' }} />Publish</button>
+          <button className="btn" onClick={() => onGo('serve')}><Globe size={15} style={{ marginRight: '0.3rem' }} />Client Access</button>
         </div>
       </div>
     </>

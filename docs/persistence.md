@@ -29,9 +29,10 @@ services:
   wagon:
     build: ..
     ports:
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:8080"   # Main UI
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5000:5000"            # Registry serve
-      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"            # Fileserver serve
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${PORT:-8080}:${PORT:-8080}"   # Main UI
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:${HAULER_UI_REGISTRY_PORT:-5000}:${HAULER_UI_REGISTRY_PORT:-5000}"   # Publishing front door
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5002:5002"   # Serve page registry (default port)
+      - "${HAULER_UI_BIND_ADDR:-127.0.0.1}:5001:5001"   # Serve page fileserver (default port)
     volumes:
       - ./data:/data
     env_file:                # every setting in deploy/.env reaches the container
