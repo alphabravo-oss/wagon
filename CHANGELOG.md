@@ -4,6 +4,15 @@ All notable changes to Wagon will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Serve no longer accepts `configFile` on `POST /api/serve/registry`. hauler's
+  `--config` overrides every other flag, so a caller's config file could make a
+  read-only registry writable and point its storage at any path in the
+  container. A request that still sends `configFile` (any value) now gets HTTP
+  400 instead of starting hauler, and the Serve page no longer has a Config File
+  field. Wagon-generated config for Publishing is unchanged.
+
 ### Changed — secure defaults (breaking)
 
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
