@@ -72,7 +72,9 @@ func (p *managedProcess) status() string {
 
 // stop marks the row stopped and then signals the process. The row is written
 // first so the monitor, which only updates rows still marked running, can never
-// record a requested stop as a crash.
+// record a requested stop as a crash. If the row can't be written, the process
+// is left running and the error is returned, so the API never reports a stop
+// that the database does not show.
 func (h *Handler) stop(p *managedProcess) error {
 	p.stopRequested.Store(true)
 	if _, err := h.db.Exec(`
@@ -80,8 +82,14 @@ func (h *Handler) stop(p *managedProcess) error {
 		SET status = 'stopped', stopped_at = CURRENT_TIMESTAMP, exit_reason = NULL
 		WHERE id = ? AND status = 'running'
 	`, p.rowID); err != nil {
-		log.Printf("Error marking serve process %d stopped: %v", p.Process.Pid, err)
+		p.stopRequested.Store(false)
+		return fmt.Errorf("recording stop: %w", err)
 	}
+	return terminate(p)
+}
+
+// terminate sends SIGTERM; a process that already exited is not an error.
+func terminate(p *managedProcess) error {
 	if err := p.Process.Signal(syscall.SIGTERM); err != nil && !errors.Is(err, os.ErrProcessDone) {
 		return err
 	}
@@ -112,7 +120,12 @@ func (h *Handler) StopAll() {
 	for _, p := range procs {
 		if p.Process != nil {
 			if err := h.stop(p); err != nil {
+				// Shutdown must not orphan hauler children, so signal anyway.
 				log.Printf("serve: stopping process %d: %v", p.Process.Pid, err)
+				p.stopRequested.Store(true)
+				if err := terminate(p); err != nil {
+					log.Printf("serve: signalling process %d: %v", p.Process.Pid, err)
+				}
 			}
 		}
 	}
