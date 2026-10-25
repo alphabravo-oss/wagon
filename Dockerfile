@@ -1,5 +1,5 @@
 # Multi-stage build for single container image
-FROM node:22-alpine AS web-builder
+FROM node:25-alpine AS web-builder
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
