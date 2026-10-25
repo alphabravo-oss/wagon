@@ -46,6 +46,21 @@ All notable changes to Wagon will be documented in this file.
   (default `30m`), and only `http` and `https` are followed. Before, a
   signed-in user could make Wagon fetch the metadata service or other
   internal hosts and serve the response from the store.
+- Sync and Load no longer let a signed-in user put root-only host files into
+  a store, where the unauthenticated serve port then served them (card 69).
+  A Sync `Files` manifest naming `/etc/host_canary.txt` (mode `0600`) added it
+  to the store; a manifest planted through Import in the haul's `archives`
+  folder made this reliable. Wagon now parses every Sync manifest and refuses
+  any local path in it outside `<data>/imports`, the way hauler resolves it
+  (relative to the data folder, URL-decoded, symlinks followed): `Files`
+  paths, `ImageTxts` refs, charts helm would load from disk, and image cosign
+  keys. Sync `filenames` must be files in `<data>/imports`. Load used any
+  absolute archive path as-is and now takes a plain archive name from the
+  haul's `archives` folder or a file in `<data>/imports`. All of these get
+  HTTP 400 before hauler starts, and a refused Load no longer clears the
+  store first. hauler now reads a checked copy of the manifest with a unique
+  name, deleted when the job ends; before, the pasted-manifest file always had
+  the same name and was deleted before the queued job could read it.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
@@ -59,6 +74,18 @@ All notable changes to Wagon will be documented in this file.
   path has no file name (HTTP 400). Extract and Copy write only inside the
   haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
   Requests that used other paths now get HTTP 400 (see Security above).
+- **Breaking:** Sync reads manifest files only from `<data>/imports` (no
+  manifest URLs in `filenames`), and every local path inside a manifest must
+  be there too. A relative filename,
+  including the default `hauler-manifest.yaml`, is now taken from
+  `<data>/imports` instead of the data folder. Manifests may only contain
+  `Files`, `Images`, `Charts`, `ThickCharts` and `ImageTxts` documents, and
+  image keys must be files in `<data>/imports` (no `~` paths or KMS URIs).
+  Load takes a plain archive name from the haul's `archives` folder, as the
+  haul page's Load button sends, and any other path only from
+  `<data>/imports`; a relative path such as `sub/a.tar.zst` is now taken
+  from `<data>/imports`. Move manifests, the files they name and archives to
+  load into `<data>/imports` (see `docs/persistence.md`).
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.

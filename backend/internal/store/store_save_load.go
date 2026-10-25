@@ -14,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
+	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
 // SaveRequest represents the request to save the store to an archive
@@ -252,6 +254,24 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// hauler loads each archive as root. A plain file name is an archive in
+	// the haul's own archives folder (the haul page's Load button sends one);
+	// any other path must be a file in <DataDir>/imports.
+	filenames := req.Filenames
+	if len(filenames) == 0 {
+		http.Error(w, "at least one filename is required", http.StatusBadRequest)
+		return
+	}
+	resolved := make([]string, 0, len(filenames))
+	for i, f := range filenames {
+		p, err := h.loadArchive(haul, fmt.Sprintf("filenames[%d]", i), f)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resolved = append(resolved, p)
+	}
+
 	// Clear this haul's store if requested.
 	if req.Clear {
 		if err := h.clearStore(haul.StoreDir); err != nil {
@@ -261,22 +281,6 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := h.JobRunner.DB().ExecContext(ctx, `DELETE FROM store_contents WHERE haul_id = ?`, haul.ID); err != nil {
 			log.Printf("Warning: failed to clear tracked contents for haul %d: %v", haul.ID, err)
-		}
-	}
-
-	// Determine archives to load. Bare filenames are resolved against the haul's
-	// archives directory; absolute paths are used as-is.
-	filenames := req.Filenames
-	if len(filenames) == 0 {
-		http.Error(w, "at least one filename is required", http.StatusBadRequest)
-		return
-	}
-	resolved := make([]string, 0, len(filenames))
-	for _, f := range filenames {
-		if filepath.IsAbs(f) {
-			resolved = append(resolved, f)
-		} else {
-			resolved = append(resolved, filepath.Join(haul.ArchivesDir(), f))
 		}
 	}
 
@@ -330,6 +334,20 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		"cleared":   req.Clear,
 		"haulId":    haul.ID,
 	})
+}
+
+// loadArchive confines a Load filename named in field: a plain file name to an
+// archive in the haul's archives folder, anything else to a file in
+// <DataDir>/imports. The error names no host path.
+func (h *Handler) loadArchive(haul *hauls.Haul, field, f string) (string, error) {
+	if !validFileName(f) {
+		return h.importFile(field, f)
+	}
+	p, err := safepath.ConfineFile(haul.ArchivesDir(), f)
+	if err != nil {
+		return "", fmt.Errorf("%s must be an archive in the haul's archives folder, or a path to a file in Wagon's imports folder (<data>/imports): %w", field, err)
+	}
+	return p, nil
 }
 
 // Import handles POST /api/store/import. It accepts a .tar.zst upload, saves it

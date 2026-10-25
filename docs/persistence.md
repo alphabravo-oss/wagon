@@ -76,6 +76,9 @@ paths are taken from the folder, and symlinks are resolved before the check.
 |-----------|-------|----------------|
 | Add File | `filePath` | an existing file in `/data/imports` |
 | Add File | `url` | an `http://` or `https://` URL with a host (no bare paths, no `file://`). Wagon downloads it to a temporary file in `/data/imports` and hauler adds that file; hauler never sees the URL |
+| Load | `filenames` | a plain file name is an archive in the haul's `archives` folder; any other path must be an existing file in `/data/imports` |
+| Sync | `filenames` | existing files in `/data/imports`; default `/data/imports/hauler-manifest.yaml` |
+| Sync | local paths inside a manifest | an existing file or folder below `/data/imports` (see [Sync manifests](#sync-manifests)) |
 | Extract | `outputDir` | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders; default `/data/hauls/<slug>/extracted` |
 | Copy Store | `dir://` target | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders |
 | Serve | `directory` | a folder inside the haul's folder, outside its store |
@@ -85,6 +88,30 @@ To add a local file, put it in `/data/imports` first (with the compose file,
 that is `deploy/data/imports/` on the host), then enter its name, such as
 `config.yaml`, under **Add File**. The Add File `name` must be a plain file
 name: no `/` or `\`, and not `.` or `..`.
+
+### Sync manifests
+
+A hauler manifest names what hauler reads, so Wagon parses every manifest
+(pasted, saved, or a file in `/data/imports`) before the job starts. It checks
+each local path the way hauler resolves it: relative to `/data`, URL-decoded,
+with symlinks followed. Each one must be an existing file or folder below
+`/data/imports`:
+
+- `Files`: `spec.files[].path`. An `http://` or `https://` URL with a host is
+  fetched by hauler, unless `filepath.Join(host, path)` exists on disk, which
+  hauler would open instead. `spec.files[].name` must be a plain file name.
+- `ImageTxts`: `spec.imageTxts[].ref`, the same way as a `Files` path.
+- `Charts` and `ThickCharts`: a chart that helm would load from disk (the chart
+  reference exists as a local path). Charts from `oci://` or `https://`
+  repositories are unchanged.
+- `Images`: `spec.images[].key` and the `hauler.dev/key` annotation (cosign
+  public keys). A key must be a file in `/data/imports`; `~` paths and KMS
+  URIs are refused.
+
+Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents
+(`v1`, `v1alpha1`) of these five kinds are accepted, and a mapping may not
+repeat a key in a different case. hauler then reads a checked JSON copy of the
+manifest from `/data/tmp`, which Wagon deletes when the job ends.
 
 ### Add File URL downloads
 

@@ -311,7 +311,7 @@ function StoreSync() {
                 <div className="form-group">
                   <label className="form-label">Manifest File Paths (-f/--filename)</label>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                    Specify one or more manifest file paths. Defaults to <code>hauler-manifest.yaml</code>.
+                    Manifest files in the imports folder (<code>/data/imports</code>); a plain name is taken from there. Every local path inside a manifest must also be in that folder. Defaults to <code>hauler-manifest.yaml</code>.
                   </div>
                   {fileList.map((file, index) => (
                     <div key={index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
@@ -598,7 +598,7 @@ function StoreSync() {
                 <strong style={{ color: 'var(--accent-amber)' }}>File Paths:</strong>
               </p>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '0.75rem' }}>
-                Reference files on the filesystem by path. Defaults to <code>hauler-manifest.yaml</code>.
+                Reference manifest files in <code>/data/imports</code>. Defaults to <code>hauler-manifest.yaml</code>.
               </p>
             </div>
           </div>

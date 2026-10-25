@@ -44,19 +44,23 @@ func rejectFlagLike(field, value string) error {
 	return nil
 }
 
-// importFile confines an add-file filePath to an existing regular file in
+// importFile confines a local file the caller names in field (add-file
+// filePath, sync and load filenames) to an existing regular file in
 // <DataDir>/imports, the one folder Wagon reads local files from. hauler runs
 // as root, so any other path would be an arbitrary read. The error names no
 // host path.
-func (h *Handler) importFile(p string) (string, error) {
+func (h *Handler) importFile(field, p string) (string, error) {
 	dir := filepath.Join(h.Cfg.DataDir, "imports")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("Error creating imports directory: %v", err)
 		return "", errors.New("imports folder is unavailable")
 	}
 	resolved, err := safepath.ConfineFile(dir, p)
+	if err == nil && resolved == "" {
+		err = errors.New("empty")
+	}
 	if err != nil {
-		return "", fmt.Errorf("filePath must be a file in Wagon's imports folder (<data>/imports): %w", err)
+		return "", fmt.Errorf("%s must be a file in Wagon's imports folder (<data>/imports): %w", field, err)
 	}
 	return resolved, nil
 }
@@ -149,25 +153,21 @@ func (h *Handler) tagJobHaul(ctx context.Context, jobID, haulID int64) {
 	}
 }
 
-// writeTempManifest writes manifest YAML content to a temporary file and returns the path
+// writeTempManifest writes manifest YAML content to a new, uniquely named
+// file in the temp folder and returns its path. The caller removes it.
 func (h *Handler) writeTempManifest(yamlContent string) (string, error) {
-	// Ensure temp directory exists
 	if err := os.MkdirAll(h.Cfg.HaulerTempDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
-
-	// Create a temporary file with a predictable name for sync operations
-	tempFile := filepath.Join(h.Cfg.HaulerTempDir, fmt.Sprintf("sync-manifest-%d.yaml", makeTimestamp()))
-	if err := os.WriteFile(tempFile, []byte(yamlContent), 0644); err != nil {
+	f, err := os.CreateTemp(h.Cfg.HaulerTempDir, "sync-manifest-*.yaml")
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp manifest: %w", err)
+	}
+	if _, err := copyAndClose(f, strings.NewReader(yamlContent)); err != nil {
+		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("failed to write temp manifest: %w", err)
 	}
-
-	return tempFile, nil
-}
-
-// makeTimestamp returns a unique timestamp-based identifier
-func makeTimestamp() int64 {
-	return int64(float64(1000000))
+	return f.Name(), nil
 }
 
 // clearStore removes a haul's store directory and recreates the OCI layout structure
