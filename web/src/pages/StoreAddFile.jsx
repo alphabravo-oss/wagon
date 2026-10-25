@@ -131,7 +131,7 @@ function StoreAddFile() {
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  URL to a remote file to download
+                  An <code>http://</code> or <code>https://</code> URL to download
                 </div>
               </div>
 
@@ -169,7 +169,7 @@ function StoreAddFile() {
                 <strong style={{ color: 'var(--accent-amber)' }}>Local file:</strong>
               </p>
               <code style={{ display: 'block', padding: '0.4rem', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
-                /path/to/file.txt
+                config.yaml (in /data/imports)
               </code>
 
               <p style={{ marginBottom: '0.75rem', marginTop: '1rem' }}>

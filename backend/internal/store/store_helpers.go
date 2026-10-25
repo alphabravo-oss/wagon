@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"log"
 	"net/http"
+	"net/url"
 	"os"
 	"path/filepath"
 	"strings"
@@ -60,13 +61,27 @@ func (h *Handler) importFile(p string) (string, error) {
 	return resolved, nil
 }
 
+// remoteFileURL checks that an add-file url is an http or https URL with a
+// host. hauler reads anything else, such as a bare path or file://, from the
+// host as root.
+func remoteFileURL(raw string) error {
+	u, err := url.Parse(raw)
+	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Hostname() == "" {
+		return errors.New("url must be an http:// or https:// URL with a host; put local files in Wagon's imports folder and use filePath")
+	}
+	return nil
+}
+
 // haulOutputDir confines a folder hauler writes into (extract output, dir://
-// copy target) to the haul's own folder, outside its store. Relative paths are
-// taken from the haul's folder. The error names no host path.
+// copy target) to the haul's own folder, outside the store, archives and
+// registry folders Wagon manages there. Relative paths are taken from the
+// haul's folder. The error names no host path.
 func haulOutputDir(haul *hauls.Haul, field, p string) (string, error) {
-	resolved, err := safepath.ConfineOutside(filepath.Dir(haul.StoreDir), haul.StoreDir, p)
+	haulDir := filepath.Dir(haul.StoreDir)
+	excluded := []string{haul.StoreDir, haul.ArchivesDir(), filepath.Join(haulDir, "registry")}
+	resolved, err := safepath.ConfineOutside(haulDir, excluded, p)
 	if err != nil {
-		return "", fmt.Errorf("%s must be a folder inside the haul's folder, outside its store: %w", field, err)
+		return "", fmt.Errorf("%s must be a folder inside the haul's folder, outside its store, archives and registry folders: %w", field, err)
 	}
 	return resolved, nil
 }

@@ -38,7 +38,7 @@ func decodeServeRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 // Errors name no host paths; they go back to the caller as a 400.
 func (h *Handler) servePaths(haul *hauls.Haul, directory, tlsCert, tlsKey string) (dir, cert, key string, err error) {
 	if directory != "" {
-		if dir, err = safepath.ConfineOutside(filepath.Dir(haul.StoreDir), haul.StoreDir, directory); err != nil {
+		if dir, err = safepath.ConfineOutside(filepath.Dir(haul.StoreDir), []string{haul.StoreDir}, directory); err != nil {
 			return "", "", "", fmt.Errorf("directory must be a folder inside the haul's folder, outside its store: %w", err)
 		}
 	}

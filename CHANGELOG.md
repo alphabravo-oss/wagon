@@ -19,14 +19,17 @@ All notable changes to Wagon will be documented in this file.
   they start with `-`, with HTTP 400.
 - Store operations no longer let a signed-in user make hauler, which runs as
   root, read or write any host path. `filePath` on `POST /api/store/add-file`
-  must be a file in `<data>/imports`; before, `/etc/shadow` or `app.db` could be
-  added to the store and served on the unauthenticated serve port. `outputDir`
-  on `POST /api/store/extract` and a `dir://` target on `POST /api/store/copy`
-  must be folders inside the haul's own folder, outside its store; before,
-  `{"outputDir":"/etc/cron.d"}` wrote artifact content there as root. Extract
-  without `outputDir` now writes to `<haul>/extracted` instead of the data
-  folder itself. The add-file `name` must not contain `/`, `\` or `..`. All of
-  these get HTTP 400 before hauler starts. Local files for Add File now go in
+  must be a file in `<data>/imports`, and `url` must be an `http://` or
+  `https://` URL with a host; before, `/etc/shadow` or `app.db` could be added
+  to the store through either field (`url` also took bare paths and `file://`)
+  and served on the unauthenticated serve port. `outputDir` on
+  `POST /api/store/extract` and a `dir://` target on `POST /api/store/copy`
+  must be folders inside the haul's own folder, outside its `store`, `archives`
+  and `registry` folders; before, `{"outputDir":"/etc/cron.d"}` wrote artifact
+  content there as root. Extract without `outputDir` now writes to
+  `<haul>/extracted` instead of the data folder itself. The add-file `name`
+  must not contain `/` or `\` and must not be `.` or `..`. All of these get
+  HTTP 400 before hauler starts. Local files for Add File now go in
   `<data>/imports` first (see `docs/persistence.md`).
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
@@ -34,6 +37,10 @@ All notable changes to Wagon will be documented in this file.
 
 ### Changed — secure defaults (breaking)
 
+- Add File takes local files only from `<data>/imports`, and its `url` only as
+  `http://` or `https://`. Extract and Copy write only inside the haul's folder,
+  and Extract without `outputDir` writes to `<haul>/extracted`. Requests that
+  used other paths now get HTTP 400 (see Security above).
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.

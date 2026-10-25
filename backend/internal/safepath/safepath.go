@@ -33,15 +33,17 @@ func Confine(root, p string) (string, error) {
 	return resolved, nil
 }
 
-// ConfineOutside is Confine that also refuses p when it resolves to excluded
-// or anything below it.
-func ConfineOutside(root, excluded, p string) (string, error) {
+// ConfineOutside is Confine that also refuses p when it resolves to one of the
+// excluded folders or anything below one. An excluded folder need not exist yet.
+func ConfineOutside(root string, excluded []string, p string) (string, error) {
 	resolved, err := Confine(root, p)
 	if err != nil {
 		return "", err
 	}
-	if ex, err := filepath.EvalSymlinks(excluded); err != nil || Within(ex, resolved) {
-		return "", errors.New("inside an excluded folder")
+	for _, e := range excluded {
+		if ex, err := resolveExisting(filepath.Clean(e)); err != nil || Within(ex, resolved) {
+			return "", errors.New("inside an excluded folder")
+		}
 	}
 	return resolved, nil
 }

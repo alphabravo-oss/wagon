@@ -271,9 +271,15 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Please provide either filePath or url, not both", http.StatusBadRequest)
 		return
 	}
+	if req.URL != "" {
+		if err := remoteFileURL(req.URL); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
 	// The name becomes the file's name when hauler serves or extracts it.
-	if strings.Contains(req.Name, "..") || strings.ContainsAny(req.Name, "/\\") {
-		http.Error(w, "name must be a plain file name, without '/', '\\' or '..'", http.StatusBadRequest)
+	if req.Name == "." || req.Name == ".." || strings.ContainsAny(req.Name, "/\\") {
+		http.Error(w, "name must be a plain file name, without '/' or '\\', and not '.' or '..'", http.StatusBadRequest)
 		return
 	}
 

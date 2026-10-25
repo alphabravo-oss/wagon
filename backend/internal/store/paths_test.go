@@ -134,18 +134,59 @@ func TestAddFile_FilePathInImportsAccepted(t *testing.T) {
 	}
 }
 
+// hauler reads a url without a scheme, or with file://, as a local path, so
+// only http and https URLs with a host are accepted.
+func TestAddFile_URLNotRemoteRejected(t *testing.T) {
+	for _, u := range []string{
+		"/etc/host_secret.txt",
+		"etc/passwd",
+		"../test.db",
+		"file:///etc/host_secret.txt",
+		"FILE:///etc/host_secret.txt",
+		"file://localhost/etc/passwd",
+		"http:///etc/passwd",
+		"https://",
+		"http://:80/f",
+		"http:/etc/passwd",
+		"ftp://example.com/f",
+		"s3://bucket/f",
+		"git::https://example.com/repo",
+		"oci://example.com/f",
+		"example.com/f",
+	} {
+		h, db := setupTestHandler(t)
+		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": u}))
+		expectRefused(t, w, db, h.Cfg.DataDir, u, "url must be an http:// or https:// URL with a host")
+	}
+}
+
+func TestAddFile_URLRemoteAccepted(t *testing.T) {
+	for _, u := range []string{"https://example.com/f.txt", "http://10.0.0.5:8080/a/b?x=1", "HTTPS://example.com/f"} {
+		h, db := setupTestHandler(t)
+		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": u}))
+		if w.Code != http.StatusAccepted {
+			t.Fatalf("%q: status %d body %q", u, w.Code, w.Body.String())
+		}
+		if args := onlyJobArgs(t, h, db); args[3] != u {
+			t.Errorf("%q: hauler got %q", u, args[3])
+		}
+	}
+}
+
 // The add-file name becomes a file name when hauler serves or extracts it.
 func TestAddFile_NameWithPathPartsRejected(t *testing.T) {
-	for _, name := range []string{"../../etc/cron.d/x", "a/b", `a\b`, ".."} {
+	for _, name := range []string{"../../etc/cron.d/x", "a/b", `a\b`, "..", "."} {
 		h, db := setupTestHandler(t)
 		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": "https://example.com/f", "name": name}))
 		expectRefused(t, w, db, h.Cfg.DataDir, name, "name must be a plain file name")
 	}
 
-	h, _ := setupTestHandler(t)
-	w := postStore(h, "add-file", `{"url":"https://example.com/f","name":"config-1.yaml"}`)
-	if w.Code != http.StatusAccepted {
-		t.Errorf("plain name: status %d body %q", w.Code, w.Body.String())
+	for _, name := range []string{"config-1.yaml", "v1..2.tgz", "..hidden"} {
+		h, _ := setupTestHandler(t)
+		w := postStore(h, "add-file", mustJSON(t, map[string]string{"url": "https://example.com/f", "name": name}))
+		if w.Code != http.StatusAccepted {
+			t.Errorf("%q: status %d body %q", name, w.Code, w.Body.String())
+		}
 	}
 }
 
@@ -169,6 +210,10 @@ func outsideHaulDirs(t *testing.T, h *Handler) []string {
 		"",
 		"store",
 		"store/blobs",
+		"archives",
+		"archives/x",
+		"registry",
+		"registry/docker",
 		"link-out",
 		"link-out/x",
 	}
