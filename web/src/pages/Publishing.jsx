@@ -128,7 +128,7 @@ function Publishing() {
           <div className="loading">Loading…</div>
         ) : !data?.routes?.length ? (
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem' }}>
-            No hauls published. Open a haul&apos;s <strong>Serve</strong> tab and click <strong>Publish</strong>.
+            No hauls published. Open a haul&apos;s <strong>Client Access</strong> tab and click <strong>Publish</strong>.
           </div>
         ) : (
           <table className="data-table">
