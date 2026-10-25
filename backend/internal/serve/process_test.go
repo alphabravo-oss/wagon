@@ -1,8 +1,10 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"os/exec"
@@ -404,6 +406,7 @@ func TestStopRegistry_DBErrorReturns500AndKeepsRunning(t *testing.T) {
 	if _, err := e.db.Exec(`ALTER TABLE serve_processes RENAME TO serve_processes_hidden`); err != nil {
 		t.Fatal(err)
 	}
+	logs := captureLog(t)
 	rr := httptest.NewRecorder()
 	e.handler.StopRegistry(rr, httptest.NewRequest(http.MethodDelete, "/api/serve/registry/"+strconv.Itoa(pid), nil))
 	if _, err := e.db.Exec(`ALTER TABLE serve_processes_hidden RENAME TO serve_processes`); err != nil {
@@ -411,6 +414,11 @@ func TestStopRegistry_DBErrorReturns500AndKeepsRunning(t *testing.T) {
 	}
 	if rr.Code != http.StatusInternalServerError {
 		t.Fatalf("stop status = %d (%s), want 500", rr.Code, rr.Body.String())
+	}
+	// The log names the step that failed, not a SIGTERM that was never sent.
+	if got := logs.String(); !strings.Contains(got, "serve: stopping registry process "+strconv.Itoa(pid)+": recording stop:") ||
+		strings.Contains(got, "SIGTERM") {
+		t.Errorf("log = %q, want the recording-stop failure and no SIGTERM claim", got)
 	}
 	select {
 	case <-proc.done:
@@ -432,5 +440,106 @@ func TestStopRegistry_DBErrorReturns500AndKeepsRunning(t *testing.T) {
 	waitDone(t, proc)
 	if status, reason := rowStatus(t, e, pid); status != "stopped" || reason != "" {
 		t.Fatalf("row = %q / %q, want stopped / empty", status, reason)
+	}
+}
+
+// captureLog sends the standard logger to a buffer for the rest of the test.
+func captureLog(t *testing.T) *bytes.Buffer {
+	t.Helper()
+	var buf bytes.Buffer
+	out, flags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(out)
+		log.SetFlags(flags)
+	})
+	return &buf
+}
+
+// While the stop is still being recorded, the process must not read as
+// stopped: the in-memory flag is set only once the row update succeeds.
+func TestStop_StatusStaysRunningUntilRowUpdated(t *testing.T) {
+	shortGrace(t, 50*time.Millisecond)
+	e := newTestEnv(t)
+	proc, err := e.handler.launch(shellCmd(t, `exec sleep 30`), "registry", 5002, e.haul.ID, `{}`)
+	if err != nil {
+		t.Fatalf("launch: %v", err)
+	}
+	// The DB has a single connection; holding it parks stop() in its UPDATE.
+	tx, err := e.db.Begin()
+	if err != nil {
+		t.Fatal(err)
+	}
+	waitsBefore := e.db.Stats().WaitCount
+	stopErr := make(chan error, 1)
+	go func() { stopErr <- e.handler.stop(proc) }()
+	deadline := time.Now().Add(5 * time.Second)
+	for e.db.Stats().WaitCount == waitsBefore {
+		if time.Now().After(deadline) {
+			_ = tx.Rollback()
+			t.Fatal("stop never reached the database")
+		}
+		time.Sleep(5 * time.Millisecond)
+	}
+	got := proc.status()
+	_ = tx.Rollback()
+	if got != "running" {
+		t.Errorf("status() while the stop is unrecorded = %q, want running", got)
+	}
+	if err := <-stopErr; err != nil {
+		t.Fatalf("stop: %v", err)
+	}
+	waitDone(t, proc)
+	if status, reason := rowStatus(t, e, proc.Process.Pid); status != "stopped" || reason != "" {
+		t.Fatalf("row = %q / %q, want stopped / empty", status, reason)
+	}
+}
+
+// A stop that updates no row (the row is no longer "running") is refused with
+// 409 and a clear message; the process is not signalled.
+func TestStop_NoRunningRowReturns409(t *testing.T) {
+	for _, tc := range []struct {
+		serveType string
+		port      int
+		stop      func(*Handler) http.HandlerFunc
+	}{
+		{"registry", 5002, func(h *Handler) http.HandlerFunc { return h.StopRegistry }},
+		{"fileserver", 5001, func(h *Handler) http.HandlerFunc { return h.StopFileserver }},
+	} {
+		t.Run(tc.serveType, func(t *testing.T) {
+			shortGrace(t, 50*time.Millisecond)
+			e := newTestEnv(t)
+			proc, err := e.handler.launch(shellCmd(t, `exec sleep 30`), tc.serveType, tc.port, e.haul.ID, `{}`)
+			if err != nil {
+				t.Fatalf("launch: %v", err)
+			}
+			t.Cleanup(func() { _ = proc.Process.Kill(); waitDone(t, proc) })
+			pid := proc.Process.Pid
+			if _, err := e.db.Exec(`UPDATE serve_processes SET status = 'crashed', exit_reason = 'test' WHERE id = ?`, proc.rowID); err != nil {
+				t.Fatal(err)
+			}
+
+			logs := captureLog(t)
+			rr := httptest.NewRecorder()
+			tc.stop(e.handler)(rr, httptest.NewRequest(http.MethodDelete, "/api/serve/"+tc.serveType+"/"+strconv.Itoa(pid), nil))
+			if rr.Code != http.StatusConflict || !strings.Contains(rr.Body.String(), "no running serve_processes row") {
+				t.Fatalf("stop = %d %q, want 409 naming the missing running row", rr.Code, rr.Body.String())
+			}
+			if want := "serve: stopping " + tc.serveType + " process " + strconv.Itoa(pid) + ": no running serve_processes row"; !strings.Contains(logs.String(), want) {
+				t.Errorf("log = %q, want %q", logs.String(), want)
+			}
+			select {
+			case <-proc.done:
+				t.Fatal("process was signalled although no row was updated")
+			case <-time.After(200 * time.Millisecond):
+			}
+			if proc.status() != "running" {
+				t.Errorf("proc.status() = %q, want running", proc.status())
+			}
+			if status, reason := rowStatus(t, e, pid); status != "crashed" || reason != "test" {
+				t.Fatalf("row = %q / %q, want the row left as crashed / test", status, reason)
+			}
+		})
 	}
 }

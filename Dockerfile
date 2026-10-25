@@ -1,5 +1,5 @@
 # Multi-stage build for single container image
-FROM node:22-alpine AS web-builder
+FROM node:25-alpine AS web-builder
 
 WORKDIR /web
 COPY web/package.json web/package-lock.json* ./
@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.26.10-alpine AS backend-builder
+FROM golang:1.27.2-alpine AS backend-builder
 
 WORKDIR /backend
 COPY backend/go.mod backend/go.sum* ./
