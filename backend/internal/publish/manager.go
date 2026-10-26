@@ -349,6 +349,11 @@ func (m *Manager) writeRegistryConfig(haulID int64, registryDir string, port int
 // startRegistry launches one internal registry process for a haul and begins
 // monitoring it. The haul must already be recorded in m.desired.
 func (m *Manager) startRegistry(haul *hauls.Haul, hostname string) (*published, error) {
+	// An empty haul from an older Wagon has no index.json, and hauler exits at
+	// once on such a store.
+	if err := hauls.EnsureStoreLayout(haul.StoreDir); err != nil {
+		return nil, fmt.Errorf("preparing store: %w", err)
+	}
 	port, err := freePort()
 	if err != nil {
 		return nil, fmt.Errorf("allocating port: %w", err)

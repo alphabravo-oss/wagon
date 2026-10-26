@@ -163,6 +163,10 @@ All notable changes to Wagon will be documented in this file.
   (`stat …/index.json: no such file or directory`); it starts with an empty
   catalog. New hauls get an empty `index.json`, and existing empty hauls get one
   when a registry serve starts.
+- Pulling from a published empty haul made by an older Wagon no longer fails
+  with HTTP 502 "registry unavailable". Its store had no `index.json`, so the
+  haul's registry exited at once; Wagon now adds an empty `index.json` before
+  it starts the registry, and `/v2/_catalog` returns an empty list.
 - `POST /api/serve/registry` without a `readonly` field now starts a read-only
   registry. Pushes need `"readonly": false` explicitly (the Serve page always
   sends the field, so it is unaffected).
