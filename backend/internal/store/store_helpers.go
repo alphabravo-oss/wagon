@@ -44,11 +44,11 @@ func rejectFlagLike(field, value string) error {
 	return nil
 }
 
-// importFile confines an add-file filePath to an existing regular file in
-// <DataDir>/imports, the one folder Wagon reads local files from. hauler runs
-// as root, so any other path would be an arbitrary read. The error names no
-// host path.
-func (h *Handler) importFile(p string) (string, error) {
+// importFile confines a caller's local file (add-file filePath, sync
+// filenames) to an existing regular file in <DataDir>/imports, the one folder
+// Wagon reads local files from. hauler runs as root, so any other path would be
+// an arbitrary read. The error names field but no host path.
+func (h *Handler) importFile(field, p string) (string, error) {
 	dir := filepath.Join(h.Cfg.DataDir, "imports")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("Error creating imports directory: %v", err)
@@ -56,7 +56,19 @@ func (h *Handler) importFile(p string) (string, error) {
 	}
 	resolved, err := safepath.ConfineFile(dir, p)
 	if err != nil {
-		return "", fmt.Errorf("filePath must be a file in Wagon's imports folder (<data>/imports): %w", err)
+		return "", fmt.Errorf("%s must be a file in Wagon's imports folder (<data>/imports): %w", field, err)
+	}
+	return resolved, nil
+}
+
+// certsFile confines a caller's key, cert or CA file to an existing regular
+// file in <DataDir>/certs, the folder Serve also reads its TLS files from.
+// hauler runs as root, so any other path would be an arbitrary read. The error
+// names field but no host path.
+func (h *Handler) certsFile(field, p string) (string, error) {
+	resolved, err := safepath.ConfineFile(filepath.Join(h.Cfg.DataDir, "certs"), p)
+	if err != nil {
+		return "", fmt.Errorf("%s must be a file in Wagon's certs folder (<data>/certs): %w", field, err)
 	}
 	return resolved, nil
 }

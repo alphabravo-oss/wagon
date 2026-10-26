@@ -14,6 +14,17 @@ All notable changes to Wagon will be documented in this file.
   are taken from those folders, symlinks are resolved before the check, and
   anything else gets HTTP 400 before hauler starts. Serve request bodies are
   capped at 64 KiB (HTTP 413).
+- Load, Sync, Add Image and Add Chart no longer let a signed-in user make
+  hauler, which runs as root, read any host file. `filenames` on
+  `POST /api/store/sync` (and its default `hauler-manifest.yaml`) must be
+  files in `<data>/imports`. `filenames` on `POST /api/store/load` must be
+  files in the haul's `archives` folder or in `<data>/imports`; before, any
+  absolute path was passed through, and a refused load with `clear` set no
+  longer wipes the store first. `key` on `POST /api/store/add-image` and
+  `/api/store/sync`, and `keyFile`, `certFile` and `caFile` on
+  `POST /api/store/add-chart`, must be files in `<data>/certs`. Relative
+  paths are taken from those folders, symlinks are resolved before the
+  check, and anything else gets HTTP 400 before hauler starts.
 - Store endpoints reject values that hauler takes as positional arguments
   (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
   they start with `-`, with HTTP 400.
@@ -65,6 +76,10 @@ All notable changes to Wagon will be documented in this file.
   path has no file name (HTTP 400). Extract and Copy write only inside the
   haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
   Requests that used other paths now get HTTP 400 (see Security above).
+- Sync manifest files go in `<data>/imports`, Load archives in the haul's
+  `archives` folder or `<data>/imports`, and signing keys and chart TLS files
+  in `<data>/certs`. `key` must be a file: cosign key references such as KMS
+  URIs or `https://` URLs now get HTTP 400.
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.

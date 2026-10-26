@@ -15,6 +15,7 @@ import (
 	"time"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
+	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
 // SaveRequest represents the request to save the store to an archive
@@ -252,6 +253,28 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Determine archives to load, before any clear. hauler reads them as root,
+	// so each must be a file in the haul's archives folder (where Save and
+	// Import put them, and where bare names are taken from) or in the imports
+	// folder.
+	filenames := req.Filenames
+	if len(filenames) == 0 {
+		http.Error(w, "at least one filename is required", http.StatusBadRequest)
+		return
+	}
+	resolved := make([]string, 0, len(filenames))
+	for _, f := range filenames {
+		p, err := safepath.ConfineFile(haul.ArchivesDir(), f)
+		if err != nil {
+			p, err = h.importFile("filenames", f)
+		}
+		if err != nil || p == "" {
+			http.Error(w, "filenames must be files in the haul's archives folder or in Wagon's imports folder (<data>/imports)", http.StatusBadRequest)
+			return
+		}
+		resolved = append(resolved, p)
+	}
+
 	// Clear this haul's store if requested.
 	if req.Clear {
 		if err := h.clearStore(haul.StoreDir); err != nil {
@@ -261,22 +284,6 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := h.JobRunner.DB().ExecContext(ctx, `DELETE FROM store_contents WHERE haul_id = ?`, haul.ID); err != nil {
 			log.Printf("Warning: failed to clear tracked contents for haul %d: %v", haul.ID, err)
-		}
-	}
-
-	// Determine archives to load. Bare filenames are resolved against the haul's
-	// archives directory; absolute paths are used as-is.
-	filenames := req.Filenames
-	if len(filenames) == 0 {
-		http.Error(w, "at least one filename is required", http.StatusBadRequest)
-		return
-	}
-	resolved := make([]string, 0, len(filenames))
-	for _, f := range filenames {
-		if filepath.IsAbs(f) {
-			resolved = append(resolved, f)
-		} else {
-			resolved = append(resolved, filepath.Join(haul.ArchivesDir(), f))
 		}
 	}
 

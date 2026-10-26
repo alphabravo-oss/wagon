@@ -81,6 +81,10 @@ paths are taken from the folder, and symlinks are resolved before the check.
 | Copy Store | `dir://` target | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders |
 | Serve | `directory` | a folder inside the haul's folder, outside its store |
 | Serve | `tlsCert`, `tlsKey` | an existing file in `/data/certs` |
+| Sync | `filenames` (default `hauler-manifest.yaml`) | an existing file in `/data/imports` |
+| Sync, Add Image | `key` | an existing file in `/data/certs` |
+| Add Chart | `keyFile`, `certFile`, `caFile` | an existing file in `/data/certs` |
+| Load | `filenames` | an existing file in the haul's `archives` folder (bare names are taken from there) or in `/data/imports` |
 
 To add a local file, put it in `/data/imports` first (with the compose file,
 that is `deploy/data/imports/` on the host), then enter its name, such as

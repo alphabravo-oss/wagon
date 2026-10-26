@@ -76,8 +76,17 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		filenames = []string{"hauler-manifest.yaml"}
 	}
 
-	// Add each file with -f flag
+	// Add each file with -f flag. A caller's file must be in the imports
+	// folder; Wagon's own temp manifest is not.
 	for _, f := range filenames {
+		if req.ManifestYaml == "" {
+			p, err := h.importFile("filenames", f)
+			if err != nil {
+				http.Error(w, err.Error(), http.StatusBadRequest)
+				return
+			}
+			f = p
+		}
 		args = append(args, "-f", f)
 	}
 
@@ -88,7 +97,12 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	// Optional key for signature verification
 	if req.Key != "" {
-		args = append(args, "--key", req.Key)
+		key, err := h.certsFile("key", req.Key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		args = append(args, "--key", key)
 	}
 
 	// Keyless options

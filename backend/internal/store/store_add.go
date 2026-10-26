@@ -66,7 +66,12 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 
 	// Optional key for signature verification
 	if req.Key != "" {
-		args = append(args, "--key", req.Key)
+		key, err := h.certsFile("key", req.Key)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		args = append(args, "--key", key)
 	}
 
 	// Keyless options
@@ -178,14 +183,20 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Optional TLS files
-	if req.KeyFile != "" {
-		args = append(args, "--key-file", req.KeyFile)
-	}
-	if req.CertFile != "" {
-		args = append(args, "--cert-file", req.CertFile)
-	}
-	if req.CAFile != "" {
-		args = append(args, "--ca-file", req.CAFile)
+	for _, f := range []struct{ field, flag, path string }{
+		{"keyFile", "--key-file", req.KeyFile},
+		{"certFile", "--cert-file", req.CertFile},
+		{"caFile", "--ca-file", req.CAFile},
+	} {
+		if f.path == "" {
+			continue
+		}
+		p, err := h.certsFile(f.field, f.path)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		args = append(args, f.flag, p)
 	}
 
 	// TLS options
@@ -295,7 +306,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	// A local path must be in the imports folder.
 	var fileSource string
 	if req.FilePath != "" {
-		resolved, err := h.importFile(req.FilePath)
+		resolved, err := h.importFile("filePath", req.FilePath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
