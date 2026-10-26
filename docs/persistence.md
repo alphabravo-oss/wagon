@@ -106,8 +106,9 @@ with symlinks followed. Each one must be an existing file or folder below
   reference exists as a local path). Charts from `oci://` or `https://`
   repositories are unchanged.
 - `Images`: `spec.images[].key` and the `hauler.dev/key` annotation (cosign
-  public keys). A key must be a file in `/data/imports`; `~` paths and KMS
-  URIs are refused.
+  public keys). A key must be a regular file in `/data/imports` or
+  `/data/certs`; folders, `~` paths and KMS URIs are refused. `Files` paths
+  may not come from `/data/certs`, since that folder holds Serve's TLS key.
 
 Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents
 (`v1`, `v1alpha1`) of these five kinds are accepted, and a mapping may not

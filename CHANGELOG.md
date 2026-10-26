@@ -68,6 +68,12 @@ All notable changes to Wagon will be documented in this file.
   checked copy keeps unquoted numbers as written (`version: 1.10` used to
   become `1.1`), and copies left by a stop mid-job are deleted at the next
   start, except one a queued job still needs.
+- A Sync manifest's cosign key (`spec.images[].key` or the `hauler.dev/key`
+  annotation) must be a regular file in `<data>/imports` or `<data>/certs`
+  (card 111). `<data>/certs` is also the folder for the request's `key` once
+  card 68 lands, so one key file can serve both. A folder or a missing file gets HTTP 400 before a job
+  exists; before, a folder in imports passed the check. `Files` paths and every
+  other local path in a manifest still have to be in `<data>/imports`.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
@@ -93,7 +99,8 @@ All notable changes to Wagon will be documented in this file.
   including the default `hauler-manifest.yaml`, is now taken from
   `<data>/imports` instead of the data folder. Manifests may only contain
   `Files`, `Images`, `Charts`, `ThickCharts` and `ImageTxts` documents, and
-  image keys must be files in `<data>/imports` (no `~` paths or KMS URIs).
+  image keys must be files in `<data>/imports` or `<data>/certs` (no `~`
+  paths or KMS URIs).
   Load takes a plain archive name from the haul's `archives` folder, as the
   haul page's Load button sends, and any other path only from
   `<data>/imports`; a relative path such as `sub/a.tar.zst` is now taken

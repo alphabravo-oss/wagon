@@ -259,16 +259,27 @@ func (h *Handler) manifestChart(name, repoURL string) error {
 	return nil
 }
 
-// manifestKey checks a cosign public key path. hauler expands a leading ~ to
-// root's home folder, so that form is refused.
+// manifestKey checks a cosign public key path. It must be an existing regular
+// file in <DataDir>/imports or <DataDir>/certs, where the request's key goes;
+// hauler only verifies with it. hauler runs in the data folder, so a relative
+// path is taken from there. hauler expands a leading ~ to root's home folder,
+// so that form is refused.
 func (h *Handler) manifestKey(key string) error {
 	if key == "" {
 		return nil
 	}
-	if strings.HasPrefix(key, "~") {
-		return errors.New("must be a file in Wagon's imports folder (<data>/imports)")
+	if !strings.HasPrefix(key, "~") {
+		p := key
+		if !filepath.IsAbs(p) {
+			p = filepath.Join(h.Cfg.DataDir, p)
+		}
+		for _, dir := range []string{"imports", "certs"} {
+			if _, err := safepath.ConfineFile(filepath.Join(h.Cfg.DataDir, dir), p); err == nil {
+				return nil
+			}
+		}
 	}
-	return h.manifestLocal(key)
+	return errors.New("must be a file in Wagon's imports folder (<data>/imports) or certs folder (<data>/certs)")
 }
 
 // manifestLocal checks a path hauler reads from disk. hauler runs in the data
