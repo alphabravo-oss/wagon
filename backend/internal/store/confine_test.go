@@ -6,18 +6,18 @@ import (
 	"testing"
 )
 
-// callerFileFields are the request fields naming a file hauler reads as root,
-// with the folder each must be in and the 400 message for anything else.
+// syncImages is a minimal Sync manifest that passes the manifest check.
+const syncImages = "apiVersion: content.hauler.cattle.io/v1\nkind: Images\nmetadata:\n  name: i\nspec:\n  images:\n    - name: docker.io/library/busybox:1\n"
+
+// callerFileFields are the request fields naming a key, cert or CA file hauler
+// reads as root, with the folder each must be in and the 400 message for
+// anything else. Load and Sync filenames are covered by the card 69 tests.
 var callerFileFields = []struct {
 	name, endpoint, folder, wantMsg string
 	body                            func(p string) map[string]any
 }{
-	{"load filenames", "load", "imports", "filenames must be files in the haul's archives folder or in Wagon's imports folder",
-		func(p string) map[string]any { return map[string]any{"filenames": []string{p}} }},
-	{"sync filenames", "sync", "imports", "filenames must be a file in Wagon's imports folder",
-		func(p string) map[string]any { return map[string]any{"filenames": []string{p}} }},
 	{"sync key", "sync", "certs", "key must be a file in Wagon's certs folder",
-		func(p string) map[string]any { return map[string]any{"manifestYaml": "kind: Images", "key": p} }},
+		func(p string) map[string]any { return map[string]any{"manifestYaml": syncImages, "key": p} }},
 	{"add-image key", "add-image", "certs", "key must be a file in Wagon's certs folder",
 		func(p string) map[string]any { return map[string]any{"imageRef": "nginx:1", "key": p} }},
 	{"add-chart keyFile", "add-chart", "certs", "keyFile must be a file in Wagon's certs folder",
@@ -134,22 +134,51 @@ func TestLoad_RejectedFilenameDoesNotClear(t *testing.T) {
 }
 
 // Sync with no filenames and no manifest reads hauler-manifest.yaml, which
-// must now be in the imports folder.
+// must now be in the imports folder. hauler gets Wagon's checked copy of it.
 func TestSync_DefaultManifestFromImports(t *testing.T) {
 	h, db := setupTestHandler(t)
 	w := postStore(h, "sync", `{}`)
-	expectRefused(t, w, db, h.Cfg.DataDir, "default", "filenames must be a file in Wagon's imports folder")
+	expectRefused(t, w, db, h.Cfg.DataDir, "default", "filenames[0] must be a file in Wagon's imports folder")
 
 	imports := filepath.Join(h.Cfg.DataDir, "imports")
 	file := filepath.Join(imports, "hauler-manifest.yaml")
-	if err := os.WriteFile(file, []byte("kind: Images"), 0644); err != nil {
+	if err := os.WriteFile(file, []byte(syncImages), 0644); err != nil {
 		t.Fatal(err)
 	}
 	if w := postStore(h, "sync", `{}`); w.Code != 202 {
 		t.Fatalf("status %d body %q", w.Code, w.Body.String())
 	}
-	if got := argAfter(onlyJobArgs(t, h, db), "-f"); got != realDir(t, file) {
-		t.Errorf("-f %q, want %q", got, realDir(t, file))
+	if got := argAfter(onlyJobArgs(t, h, db), "-f"); filepath.Dir(got) != h.Cfg.HaulerTempDir {
+		t.Errorf("-f %q, want a checked copy in %q", got, h.Cfg.HaulerTempDir)
+	}
+}
+
+// The request's key is taken from <data>/certs, while a key inside the
+// manifest is taken from the data folder, so the same file is "cosign.pub" in
+// one and "certs/cosign.pub" in the other. A refused request key leaves no
+// manifest copy behind.
+func TestSync_RequestKeyFromCertsManifestKeyFromData(t *testing.T) {
+	f, certs, _ := newCard111Fixture(t)
+	db := f.h.JobRunner.DB()
+	w := postStore(f.h, "sync", mustJSON(t, map[string]any{
+		"manifestYaml": imagesWithKey("certs/cosign.pub", false), "key": "certs/cosign.pub"}))
+	expectRefused(t, w, db, f.dataDir, "request key certs/cosign.pub", "key must be a file in Wagon's certs folder")
+	if left, _ := filepath.Glob(filepath.Join(f.h.Cfg.HaulerTempDir, syncManifestPattern)); len(left) != 0 {
+		t.Errorf("refused key left manifest copies %q", left)
+	}
+
+	w = postStore(f.h, "sync", mustJSON(t, map[string]any{
+		"manifestYaml": imagesWithKey("certs/cosign.pub", false), "key": "cosign.pub"}))
+	if w.Code != 202 {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+	if got, want := argAfter(onlyJobArgs(t, f.h, db), "--key"), realDir(t, filepath.Join(certs, "cosign.pub")); got != want {
+		t.Errorf("--key %q, want %q", got, want)
+	}
+
+	w = postStore(f.h, "sync", mustJSON(t, map[string]any{"manifestYaml": imagesWithKey("cosign.pub", false)}))
+	if w.Code != 400 {
+		t.Errorf("manifest key cosign.pub: status %d body %q, want 400", w.Code, w.Body.String())
 	}
 }
 

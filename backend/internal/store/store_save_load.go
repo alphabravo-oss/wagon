@@ -14,6 +14,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
@@ -253,23 +254,19 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine archives to load, before any clear. hauler reads them as root,
-	// so each must be a file in the haul's archives folder (where Save and
-	// Import put them, and where bare names are taken from) or in the imports
-	// folder.
+	// hauler loads each archive as root. A plain file name is an archive in
+	// the haul's own archives folder (the haul page's Load button sends one);
+	// any other path must be a file in <DataDir>/imports.
 	filenames := req.Filenames
 	if len(filenames) == 0 {
 		http.Error(w, "at least one filename is required", http.StatusBadRequest)
 		return
 	}
 	resolved := make([]string, 0, len(filenames))
-	for _, f := range filenames {
-		p, err := safepath.ConfineFile(haul.ArchivesDir(), f)
+	for i, f := range filenames {
+		p, err := h.loadArchive(haul, fmt.Sprintf("filenames[%d]", i), f)
 		if err != nil {
-			p, err = h.importFile("filenames", f)
-		}
-		if err != nil || p == "" {
-			http.Error(w, "filenames must be files in the haul's archives folder or in Wagon's imports folder (<data>/imports)", http.StatusBadRequest)
+			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
 		resolved = append(resolved, p)
@@ -337,6 +334,20 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		"cleared":   req.Clear,
 		"haulId":    haul.ID,
 	})
+}
+
+// loadArchive confines a Load filename named in field: a plain file name to an
+// archive in the haul's archives folder, anything else to a file in
+// <DataDir>/imports. The error names no host path.
+func (h *Handler) loadArchive(haul *hauls.Haul, field, f string) (string, error) {
+	if !validFileName(f) {
+		return h.importFile(field, f)
+	}
+	p, err := safepath.ConfineFile(haul.ArchivesDir(), f)
+	if err != nil {
+		return "", fmt.Errorf("%s must be an archive in the haul's archives folder, or a path to a file in Wagon's imports folder (<data>/imports): %w", field, err)
+	}
+	return p, nil
 }
 
 // Import handles POST /api/store/import. It accepts a .tar.zst upload, saves it
