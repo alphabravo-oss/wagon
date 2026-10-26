@@ -29,7 +29,9 @@ func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
 	dataDir := t.TempDir()
 	name := filepath.Join(dataDir, "test.db")
 
-	db, err := sql.Open("sqlite", name)
+	// The test polls jobs while background goroutines write them; without a
+	// busy timeout those writes can fail with SQLITE_BUSY and be dropped.
+	db, err := sql.Open("sqlite", "file:"+name+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("opening database: %v", err)
 	}

@@ -13,6 +13,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 	"github.com/alphabravo-oss/wagon/backend/internal/safefetch"
@@ -204,7 +205,7 @@ func TestAddFile_URLNeverReachesHauler(t *testing.T) {
 		if job.Status != jobrunner.StatusFailed || !jobLogContains(t, h, job.ID, "download failed") {
 			t.Errorf("%q: job %s, want failed with a download error", tc.url, job.Status)
 		}
-		if _, err := os.Stat(args[3]); !os.IsNotExist(err) {
+		if err := waitRemoved(t, args[3]); !os.IsNotExist(err) {
 			t.Errorf("%q: download file left behind: %v", tc.url, err)
 		}
 	}
@@ -267,24 +268,46 @@ func TestAddFile_URLDownloadedThenAdded(t *testing.T) {
 	if got, _ := os.ReadFile(filepath.Join(out, "args")); !strings.Contains(string(got), "--name tool.tgz") {
 		t.Errorf("hauler args %q, want --name tool.tgz", got)
 	}
-	if _, err := os.Stat(args[3]); !os.IsNotExist(err) {
+	if err := waitRemoved(t, args[3]); !os.IsNotExist(err) {
 		t.Errorf("download file left behind: %v", err)
 	}
 }
 
-// waitJob waits for the single job to end and returns it.
+// waitJob polls the single job until it succeeds or fails and returns it.
 func waitJob(t *testing.T, h *Handler, db *sql.DB) *jobrunner.Job {
 	t.Helper()
-	waitJobsDone(t, db)
 	var id int64
 	if err := db.QueryRow("SELECT id FROM jobs").Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	job, err := h.JobRunner.GetJob(context.Background(), id)
-	if err != nil {
-		t.Fatal(err)
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		job, err := h.JobRunner.GetJob(context.Background(), id)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == jobrunner.StatusSucceeded || job.Status == jobrunner.StatusFailed {
+			return job
+		}
+		if time.Now().After(deadline) {
+			t.Fatalf("job %d still %s after 10s", id, job.Status)
+		}
+		time.Sleep(10 * time.Millisecond)
 	}
-	return job
+}
+
+// waitRemoved polls until p no longer exists. A prepared job's cleanup runs
+// just after its final status is stored, so the file can outlive that briefly.
+func waitRemoved(t *testing.T, p string) error {
+	t.Helper()
+	deadline := time.Now().Add(10 * time.Second)
+	for {
+		_, err := os.Stat(p)
+		if os.IsNotExist(err) || time.Now().After(deadline) {
+			return err
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
 }
 
 func jobLogContains(t *testing.T, h *Handler, jobID int64, want string) bool {
