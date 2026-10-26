@@ -48,11 +48,19 @@ All notable changes to Wagon will be documented in this file.
   internal hosts and serve the response from the store.
 - Add Image, Add Chart and Sync check the hosts hauler will connect to against
   the same address policy (SSRF): the registry in `imageRef`, the host of
-  `repoUrl`, and Sync `registry` and `productRegistry`. A host that is
-  blocked, or that does not resolve, gets HTTP 400 before a job is created.
-  Before, `{"imageRef":"169.254.169.254/latest/meta-data"}` or a `repoUrl` on
-  `127.0.0.1` made hauler, which runs as root, connect there. Images and
-  charts listed inside a Sync manifest are not checked yet.
+  `repoUrl`, the host of a chart `name` that is a URL (`oci://…`,
+  `https://…/x.tgz`), and Sync `registry` and `productRegistry`. A host that
+  is blocked, or that does not resolve, gets HTTP 400 before a job is created.
+  The 400 names the host but not the addresses it resolves to, and the lookup
+  gives up after 10 seconds. Before, `{"imageRef":"169.254.169.254/latest/meta-data"}`,
+  a `repoUrl` on `127.0.0.1` or `{"name":"oci://127.0.0.1:5000/charts/x"}`
+  made hauler, which runs as root, connect there. Images and charts listed
+  inside a Sync manifest are not checked yet.
+  Only the first host is checked, not the hosts reached after it: redirects,
+  registry auth realms, absolute chart URLs in a repository's `index.yaml`,
+  chart dependencies, and images inside a chart. hauler also resolves the
+  name again when the job runs, so a DNS answer that changes in between is
+  not stopped.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.

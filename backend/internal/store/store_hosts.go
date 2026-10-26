@@ -36,8 +36,9 @@ func (h *Handler) checkRegistry(ctx context.Context, field, registry string) err
 }
 
 // checkRepoURL checks the host of a chart repository URL such as
-// "https://charts.example.com" or "oci://registry.example.com/charts". A URL
-// without a host, such as a repository name, is left to hauler.
+// "https://charts.example.com" or "oci://registry.example.com/charts", or of a
+// chart name that is a URL. A value without a host, such as a repository or
+// chart name, is left to hauler.
 func (h *Handler) checkRepoURL(ctx context.Context, field, repoURL string) error {
 	u, err := url.Parse(repoURL)
 	if err != nil {

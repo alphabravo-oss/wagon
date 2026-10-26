@@ -131,8 +131,9 @@ resolve to against the same rules as Add File urls:
   in `registry.example.com:5000/app:1`. A reference without a registry, such
   as `nginx:1.27`, goes to Docker Hub and is not checked.
 - Add Chart: the host of `repoUrl`, such as `https://charts.example.com` or
-  `oci://registry.example.com/charts`. A `repoUrl` that is not a valid URL is
-  refused.
+  `oci://registry.example.com/charts`, and the host of `name` when the chart
+  name is a URL, such as `oci://ghcr.io/org/charts/app`. A `repoUrl` or URL
+  `name` that is not a valid URL is refused.
 - Sync: `registry` and `productRegistry`.
 
 A blocked or unresolvable host gets HTTP 400 and no job. To use a registry or
@@ -143,6 +144,12 @@ is refused even when the proxy could reach it.
 hauler resolves the name again when the job runs, so this check does not stop
 a DNS answer that changes in between. Image and chart references inside a Sync
 manifest are not checked.
+
+Only the first host is checked: the one in the request. Hosts that hauler or
+helm reach after it are not: HTTP redirects (including a registry's blob
+redirects), the token realm a registry names in its auth challenge, absolute
+chart URLs in a repository's `index.yaml`, chart dependencies
+(`addDependencies`) and images listed inside a chart (`addImages`).
 
 ## Environment Variables
 

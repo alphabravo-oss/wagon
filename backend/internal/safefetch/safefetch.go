@@ -37,6 +37,8 @@ const (
 
 	maxRedirects = 10
 	dialTimeout  = 30 * time.Second
+	// lookupTimeout bounds CheckHost's DNS lookup, which runs on the request path.
+	lookupTimeout = 10 * time.Second
 )
 
 // alwaysBlocked can never be allowed: Wagon's own host, cloud metadata and
@@ -146,16 +148,25 @@ func New(opts Options) *Fetcher {
 
 // check reports whether ip may be connected to.
 func (f *Fetcher) check(ip netip.Addr) error {
+	if blocked, reason := f.blockReason(ip); reason != "" {
+		return fmt.Errorf("%w: %s is %s", ErrBlocked, blocked, reason)
+	}
+	return nil
+}
+
+// blockReason returns why ip may not be connected to, and the address the
+// reason is about, or "" when ip is allowed.
+func (f *Fetcher) blockReason(ip netip.Addr) (netip.Addr, string) {
 	ip = ip.WithZone("").Unmap()
 	if nat64.Contains(ip) {
 		b := ip.As16()
-		if err := f.check(netip.AddrFrom4([4]byte(b[12:]))); err != nil {
-			return err
+		if blocked, reason := f.blockReason(netip.AddrFrom4([4]byte(b[12:]))); reason != "" {
+			return blocked, reason
 		}
 	}
 	for _, p := range alwaysBlocked {
 		if p.Contains(ip) {
-			return fmt.Errorf("%w: %s is a loopback, link-local, multicast or reserved address", ErrBlocked, ip)
+			return ip, "a loopback, link-local, multicast or reserved address"
 		}
 	}
 	for _, p := range private {
@@ -163,26 +174,29 @@ func (f *Fetcher) check(ip netip.Addr) error {
 			continue
 		}
 		if AllowPrivateByDefault {
-			return nil
+			return ip, ""
 		}
 		for _, a := range f.allow {
 			if a.Contains(ip) {
-				return nil
+				return ip, ""
 			}
 		}
-		return fmt.Errorf("%w: %s is a private address; list its range in HAULER_UI_FETCH_ALLOW_CIDRS to allow it", ErrBlocked, ip)
+		return ip, "a private address; list its range in HAULER_UI_FETCH_ALLOW_CIDRS to allow it"
 	}
-	return nil
+	return ip, ""
 }
 
 // CheckHost resolves host and checks every address it resolves to. It is for
 // hosts Wagon hands to hauler rather than connecting to itself; hauler
 // resolves the name again when the job runs, so a DNS answer can still change
-// in between.
+// in between. The error leaves out the addresses a name resolves to, since
+// callers show it to the user.
 func (f *Fetcher) CheckHost(ctx context.Context, host string) error {
 	if ip, err := netip.ParseAddr(host); err == nil {
 		return f.check(ip)
 	}
+	ctx, cancel := context.WithTimeout(ctx, lookupTimeout)
+	defer cancel()
 	ips, err := f.lookup(ctx, host)
 	if err != nil {
 		// The resolver's error names Wagon's DNS server; callers show this
@@ -197,8 +211,8 @@ func (f *Fetcher) CheckHost(ctx context.Context, host string) error {
 		return fmt.Errorf("cannot resolve %s: no addresses", host)
 	}
 	for _, ip := range ips {
-		if err := f.check(ip); err != nil {
-			return err
+		if _, reason := f.blockReason(ip); reason != "" {
+			return fmt.Errorf("%w: %s resolves to %s", ErrBlocked, host, reason)
 		}
 	}
 	return nil

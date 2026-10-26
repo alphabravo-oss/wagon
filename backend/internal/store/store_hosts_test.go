@@ -79,6 +79,12 @@ func TestStoreHosts_BlockedRefused(t *testing.T) {
 		{"add-chart", map[string]string{"name": "app", "repoUrl": "oci://[::1]/charts"}, blocked},
 		{"add-chart", map[string]string{"name": "app", "repoUrl": "https://user:pw@localhost/charts"}, blocked},
 		{"add-chart", map[string]string{"name": "app", "repoUrl": "oci://public.example/%zz"}, "repoUrl: not a valid URL"},
+		// helm pulls a chart name that is a URL directly, without repoUrl.
+		{"add-chart", map[string]string{"name": "oci://127.0.0.1:5000/charts/x"}, blocked},
+		{"add-chart", map[string]string{"name": "oci://[::1]:5000/charts/x"}, blocked},
+		{"add-chart", map[string]string{"name": "http://169.254.169.254/latest/meta-data/x.tgz"}, blocked},
+		{"add-chart", map[string]string{"name": "https://10.0.0.5/charts/x.tgz"}, blocked},
+		{"add-chart", map[string]string{"name": "oci://internal.example/charts/x"}, blocked},
 		{"sync", map[string]string{"registry": "127.0.0.1:5000"}, blocked},
 		{"sync", map[string]string{"registry": "internal.example"}, blocked},
 		{"sync", map[string]string{"registry": "user@public.example"}, "not a valid registry"},
@@ -91,6 +97,13 @@ func TestStoreHosts_BlockedRefused(t *testing.T) {
 		expectRefused(t, w, db, h.Cfg.DataDir, tc.endpoint+" "+body, tc.wantMsg)
 		if strings.Contains(w.Body.String(), "192.0.2.53") {
 			t.Errorf("%s %s: 400 body names the DNS server: %q", tc.endpoint, body, w.Body.String())
+		}
+		// The addresses a name resolves to (see hostPolicyHandler) would make
+		// the 400 a DNS oracle.
+		for _, ip := range []string{"127.0.0.1", "::1", "10.1.2.3"} {
+			if !strings.Contains(body, ip) && strings.Contains(w.Body.String(), ip) {
+				t.Errorf("%s %s: 400 body names resolved address %s: %q", tc.endpoint, body, ip, w.Body.String())
+			}
 		}
 	}
 }
@@ -118,6 +131,8 @@ func TestStoreHosts_AllowedAccepted(t *testing.T) {
 		{"add-chart", map[string]string{"name": "loki", "repoUrl": "grafana"}},
 		{"add-chart", map[string]string{"name": "app", "repoUrl": "https://charts.example.com"}},
 		{"add-chart", map[string]string{"name": "app", "repoUrl": "oci://10.20.0.5:5000/charts"}},
+		{"add-chart", map[string]string{"name": "oci://ghcr.io/org/charts/app"}},
+		{"add-chart", map[string]string{"name": "bitnami/nginx"}},
 		{"sync", map[string]string{"manifestYaml": syncManifest}},
 		{"sync", map[string]string{"manifestYaml": syncManifest, "registry": "mirror.example:5000"}},
 		{"sync", map[string]string{"manifestYaml": syncManifest, "products": "rancher=v2.10.1", "productRegistry": "myorg"}},
