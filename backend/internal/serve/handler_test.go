@@ -707,13 +707,23 @@ func TestServeRegistry_ArgsNeverIncludeConfig(t *testing.T) {
 		{`{}`, true},
 		{`{"readonly":true}`, true},
 		{`{"readonly":false}`, true},
-		{`{"port":5094,"directory":"/tmp/reg","tlsCert":"/tmp/c.pem","tlsKey":"/tmp/k.pem"}`, true},
+		{`{"port":5094,"directory":"reg","tlsCert":"c.pem","tlsKey":"k.pem"}`, true},
 		{`{"autoTls":true,"readonly":true}`, true},
 		{`{"readonly":true,"configFile":"/tmp/writable.yaml"}`, false},
 	} {
 		t.Run(tc.body, func(t *testing.T) {
 			argsFile := recordingHauler(t)
 			e := newTestEnv(t)
+			// Serve accepts tlsCert and tlsKey only as files in DataDir/certs.
+			certs := filepath.Join(e.cfg.DataDir, "certs")
+			if err := os.MkdirAll(certs, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"c.pem", "k.pem"} {
+				if err := os.WriteFile(filepath.Join(certs, name), []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
 
 			rr := httptest.NewRecorder()
 			e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(tc.body)))

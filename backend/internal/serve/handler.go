@@ -222,12 +222,8 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ServeRegistryRequest
-	body, err := io.ReadAll(r.Body)
-	if err == nil {
-		err = json.NewDecoder(bytes.NewReader(body)).Decode(&req)
-	}
-	if err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	body, ok := decodeServeRequest(w, r, &req)
+	if !ok {
 		return
 	}
 	if hasField(body, "configFile") {
@@ -239,6 +235,16 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	haul, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
 		http.Error(w, "Failed to resolve haul: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Pin caller-supplied paths before hauler, which runs as root, sees them.
+	// Auto TLS ignores tlsCert and tlsKey.
+	if req.AutoTLS {
+		req.TLSCert, req.TLSKey = "", ""
+	}
+	if req.Directory, req.TLSCert, req.TLSKey, err = h.servePaths(haul, req.Directory, req.TLSCert, req.TLSKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -748,8 +754,7 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ServeFileserverRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	if _, ok := decodeServeRequest(w, r, &req); !ok {
 		return
 	}
 
@@ -757,6 +762,16 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	haul, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
 		http.Error(w, "Failed to resolve haul: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Pin caller-supplied paths before hauler, which runs as root, sees them.
+	// Auto TLS ignores tlsCert and tlsKey.
+	if req.AutoTLS {
+		req.TLSCert, req.TLSKey = "", ""
+	}
+	if req.Directory, req.TLSCert, req.TLSKey, err = h.servePaths(haul, req.Directory, req.TLSCert, req.TLSKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

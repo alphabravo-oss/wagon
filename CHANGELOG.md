@@ -6,6 +6,17 @@ All notable changes to Wagon will be documented in this file.
 
 ### Security
 
+- Serve no longer passes caller-chosen paths straight to hauler, which runs as
+  root. `directory` on `POST /api/serve/registry` and `/api/serve/fileserver`
+  must be a folder inside the haul's own folder and outside its store; before,
+  `{"directory":"/etc"}` served `/etc` and let file artifacts overwrite files
+  there. `tlsCert` and `tlsKey` must be files in `<data>/certs`. Relative paths
+  are taken from those folders, symlinks are resolved before the check, and
+  anything else gets HTTP 400 before hauler starts. Serve request bodies are
+  capped at 64 KiB (HTTP 413).
+- Store endpoints reject values that hauler takes as positional arguments
+  (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
+  they start with `-`, with HTTP 400.
 - Serve no longer accepts `configFile` on `POST /api/serve/registry`. hauler's
   `--config` overrides every other flag, so a caller's config file could make a
   read-only registry writable and point its storage at any path in the

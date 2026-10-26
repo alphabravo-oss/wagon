@@ -112,6 +112,60 @@ func defaultStoreDir(t *testing.T, h *Handler) string {
 	return haul.StoreDir
 }
 
+func TestPositionalArgs_RejectLeadingDash(t *testing.T) {
+	tests := []struct {
+		name     string
+		endpoint string
+		body     string
+	}{
+		{"add-image", "add-image", `{"imageRef":"--help"}`},
+		{"add-chart", "add-chart", `{"name":"-v"}`},
+		{"add-file-path", "add-file", `{"filePath":"--store=/etc"}`},
+		{"add-file-url", "add-file", `{"url":"-x"}`},
+		{"remove", "remove", `{"match":"--force"}`},
+		{"extract", "extract", `{"artifactRef":"-o"}`},
+	}
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			handler, db := setupTestHandler(t)
+			mux := http.NewServeMux()
+			handler.RegisterRoutes(mux)
+			r := httptest.NewRequest(http.MethodPost, "/api/store/"+tt.endpoint, strings.NewReader(tt.body))
+			r.Header.Set("Content-Type", "application/json")
+			w := httptest.NewRecorder()
+
+			mux.ServeHTTP(w, r)
+
+			if w.Code != http.StatusBadRequest {
+				t.Errorf("expected status %d, got %d", http.StatusBadRequest, w.Code)
+			}
+			if !strings.Contains(w.Body.String(), "must not start with '-'") {
+				t.Errorf("expected leading-dash error, got: %s", w.Body.String())
+			}
+			var count int
+			if err := db.QueryRow("SELECT COUNT(*) FROM jobs").Scan(&count); err != nil {
+				t.Fatalf("counting jobs: %v", err)
+			}
+			if count != 0 {
+				t.Errorf("expected no jobs, got %d", count)
+			}
+		})
+	}
+}
+
+func TestPositionalArgs_AllowInnerDash(t *testing.T) {
+	handler, _ := setupTestHandler(t)
+	r := httptest.NewRequest(http.MethodPost, "/api/store/add-image", strings.NewReader(`{"imageRef":"docker.io/library/my-app:1-alpine"}`))
+	r.Header.Set("Content-Type", "application/json")
+	w := httptest.NewRecorder()
+
+	handler.AddImage(w, r)
+
+	if w.Code == http.StatusBadRequest {
+		t.Errorf("unexpected status %d: %s", w.Code, w.Body.String())
+	}
+}
+
 func TestCopyHandler_InvalidMethod(t *testing.T) {
 	handler, _ := setupTestHandler(t)
 

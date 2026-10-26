@@ -109,6 +109,10 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "match is required", http.StatusBadRequest)
 		return
 	}
+	if err := rejectFlagLike("match", req.Match); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
