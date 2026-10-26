@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 	"slices"
 	"strings"
+	"unicode"
 
 	"gopkg.in/yaml.v3"
 
@@ -223,13 +224,7 @@ func (h *Handler) checkSyncDoc(ctx context.Context, doc []byte) error {
 		}
 	case "Charts", "ThickCharts":
 		for i, c := range d.Spec.Charts {
-			if err := h.manifestChart(c.Name, c.RepoURL); err != nil {
-				return fmt.Errorf("charts[%d] %w", i, err)
-			}
-			if err := h.manifestChartURL(ctx, fmt.Sprintf("charts[%d].name", i), c.Name); err != nil {
-				return err
-			}
-			if err := h.manifestChartURL(ctx, fmt.Sprintf("charts[%d].repoURL", i), c.RepoURL); err != nil {
+			if err := h.manifestChart(ctx, fmt.Sprintf("charts[%d]", i), c.Name, c.RepoURL); err != nil {
 				return err
 			}
 			for j, img := range c.ExtraImages {
@@ -253,18 +248,19 @@ func (h *Handler) checkSyncDoc(ctx context.Context, doc []byte) error {
 // manifestSource checks a source hauler's getters open (a Files path or an
 // ImageTxts ref). They read filepath.Join(host, path) of the parsed URL from
 // disk whenever it exists, whatever the scheme, so that must lie in imports.
-// Only an http or https URL with a host whose local form does not exist is
-// fetched from the network instead, and only when that local form cannot name
-// something in or above the data folder: jobs queue, so it could appear
-// before hauler runs. The host of a fetched URL is checked like a direct
-// request's.
+// An http or https URL with a host may be fetched from the network even then:
+// hauler picks the file or http getter in random map order when both match.
+// So the host of such a URL is always checked like a direct request's. When
+// its local form does not exist, that form must not name something in or
+// above the data folder: jobs queue, so it could appear before hauler runs.
 func (h *Handler) manifestSource(ctx context.Context, field, src string) error {
 	u, err := url.Parse(src)
 	if err != nil {
 		return fmt.Errorf("%s is not a valid path or URL", field)
 	}
 	local := filepath.Join(u.Host, u.Path)
-	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && !h.mayExist(local) {
+	web := (u.Scheme == "http" || u.Scheme == "https") && u.Host != ""
+	if web && !h.mayExist(local) {
 		if h.dataFolderEntry(local) {
 			return fmt.Errorf("%s is a URL hauler would read from disk if its host and path named a file by the time the job runs; use a real host name", field)
 		}
@@ -272,6 +268,9 @@ func (h *Handler) manifestSource(ctx context.Context, field, src string) error {
 	}
 	if err := h.manifestLocal(local); err != nil {
 		return fmt.Errorf("%s %w", field, err)
+	}
+	if web {
+		return h.checkRepoURL(ctx, field, src)
 	}
 	return nil
 }
@@ -318,35 +317,60 @@ func (h *Handler) dataFolderEntry(p string) bool {
 }
 
 // manifestChart checks a chart the way hauler builds the chart reference and
-// helm locates it: helm loads the reference from disk whenever it exists. A
-// repoURL must be an http, https or oci:// URL or a relative path; a file URL
-// or an absolute path would point helm at the host's disk.
-func (h *Handler) manifestChart(name, repoURL string) error {
-	errRepo := errors.New("repoURL must be an http, https or oci:// URL")
+// helm locates it: helm loads the reference from disk whenever it exists, and
+// pulls it directly when it is a URL. A repoURL must be an http, https or
+// oci:// URL or a relative path; a file URL or an absolute path would point
+// helm at the host's disk. The hosts of the name, the repoURL and the
+// reference hauler joins from them are checked like Add Chart's. field is the
+// chart's, such as "charts[0]".
+func (h *Handler) manifestChart(ctx context.Context, field, name, repoURL string) error {
+	errRepo := fmt.Errorf("%s repoURL must be an http, https or oci:// URL", field)
 	if repo := strings.TrimSpace(repoURL); filepath.IsAbs(repo) || strings.HasPrefix(strings.ToLower(repo), "file:") {
 		return errRepo
 	}
-	ref := name
+	for _, f := range []struct{ name, v string }{{"name", name}, {"repoURL", repoURL}} {
+		if spaceOrControl(f.v) {
+			return fmt.Errorf("%s.%s must not start or end with a space or contain a control character", field, f.name)
+		}
+	}
+	ref, joined := name, false
 	if strings.HasPrefix(repoURL, "oci://") {
-		ref = repoURL + "/" + name
+		ref, joined = repoURL+"/"+name, true
 	} else if u, err := url.ParseRequestURI(repoURL); err != nil {
-		ref = repoURL + "/" + name
+		ref, joined = repoURL+"/"+name, true
 	} else if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "oci" {
 		return errRepo
 	}
 	ref = strings.TrimSpace(ref)
-	if !h.mayExist(ref) {
-		return nil // fetched from the repository
+	if h.mayExist(ref) {
+		if err := h.manifestLocal(ref); err != nil {
+			return fmt.Errorf("%s names a local chart that %w", field, err)
+		}
 	}
-	if err := h.manifestLocal(ref); err != nil {
-		return fmt.Errorf("names a local chart that %w", err)
+	if err := h.manifestChartURL(ctx, field+".name", name); err != nil {
+		return err
+	}
+	// Like Add Chart, whether or not it contains "://".
+	if err := h.checkRepoURL(ctx, field+".repoURL", repoURL); err != nil {
+		return err
+	}
+	if joined && strings.Contains(ref, "://") {
+		return h.checkRepoURL(ctx, field+" repoURL + \"/\" + name", ref)
 	}
 	return nil
 }
 
-// manifestChartURL checks the host of a chart name or repoURL that is a URL
-// (helm pulls a name that is a URL directly). A relative path has no host;
-// manifestChart confines it to imports.
+// spaceOrControl reports whether s starts or ends with a space (any
+// unicode.IsSpace rune, such as a tab or U+00A0) or holds a control character.
+// helm trims the chart reference hauler builds, so " oci:" + "/127.0.0.1/x"
+// would name a URL that neither field spells.
+func spaceOrControl(s string) bool {
+	return strings.TrimFunc(s, unicode.IsSpace) != s || strings.ContainsFunc(s, unicode.IsControl)
+}
+
+// manifestChartURL checks the host of a chart name that is a URL (helm pulls
+// a name that is a URL directly). A relative path has no host; manifestChart
+// confines it to imports.
 func (h *Handler) manifestChartURL(ctx context.Context, field, v string) error {
 	if !strings.Contains(v, "://") {
 		return nil

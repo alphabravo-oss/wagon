@@ -9,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 // SyncRequest represents the request to sync the store from manifests
@@ -33,6 +34,10 @@ type SyncRequest struct {
 // and runs it unchecked, so it could name any host file.
 const errProductsRemoved = "products and productRegistry are not supported: hauler would run the product's manifest from that registry without Wagon checking it; put the manifest in Wagon's imports folder (<data>/imports) and sync it with filenames"
 
+// syncHostsTimeout bounds all the host lookups one Sync request makes, for
+// its registry and every host its manifests name.
+const syncHostsTimeout = 30 * time.Second
+
 // Sync handles POST /api/store/sync
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -49,7 +54,9 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errProductsRemoved, http.StatusBadRequest)
 		return
 	}
-	if err := h.checkRegistry(r.Context(), "registry", req.Registry); err != nil {
+	hostsCtx, cancel := context.WithTimeout(withHostChecks(r.Context()), syncHostsTimeout)
+	defer cancel()
+	if err := h.checkRegistry(hostsCtx, "registry", req.Registry); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
@@ -65,7 +72,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	// hauler reads each manifest, and every path in it, as root. Wagon checks
 	// them and hands hauler one checked copy, removed once the job ends.
-	manifest, filenames, err := h.syncManifest(r.Context(), req)
+	manifest, filenames, err := h.syncManifest(hostsCtx, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return

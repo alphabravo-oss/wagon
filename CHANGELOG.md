@@ -57,13 +57,18 @@ All notable changes to Wagon will be documented in this file.
   made hauler, which runs as root, connect there. The hosts named inside a
   Sync manifest are checked the same way (card 114): each image `name`, the
   `hauler.dev/registry` annotation, a chart's `repoURL`, a chart `name` that is
-  a URL, ThickCharts `extraImages` refs, and the host of an `http(s)` `Files`
-  path or `ImageTxts` ref that hauler downloads. Before, a manifest naming
-  `oci://127.0.0.1:5000/charts` or `127.0.0.1:5000/app:1` got HTTP 202.
+  a URL, the `repoURL/name` reference hauler joins when that is a URL,
+  ThickCharts `extraImages` refs, and the host of every `http(s)` `Files` path
+  or `ImageTxts` ref, even one whose host and path also name a file in
+  imports. A chart `repoURL` or `name` that starts or ends with a space or
+  holds a control character is refused. Each host is looked up once per
+  request, within one 30-second limit for the whole Sync. Before, a manifest
+  naming `oci://127.0.0.1:5000/charts`, `127.0.0.1:5000/app:1`, or
+  `repoURL: " oci:"` with `name: /127.0.0.1:5000/charts/x` got HTTP 202.
   Only the first host is checked, not the hosts reached after it: redirects,
   registry auth realms, absolute chart URLs in a repository's `index.yaml`,
-  chart dependencies, images inside a chart, and the images an `ImageTxts`
-  file lists. hauler also resolves the name again when the job runs, so a DNS
+  the images a ThickCharts chart renders, and the images an `ImageTxts` file
+  lists. hauler also resolves the name again when the job runs, so a DNS
   answer that changes in between is not stopped.
 - Sync and Load no longer let a signed-in user put root-only host files into
   a store, where the unauthenticated serve port then served them (card 69).
