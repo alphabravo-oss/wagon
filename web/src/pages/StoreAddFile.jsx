@@ -87,13 +87,13 @@ function StoreAddFile() {
                 <label className="form-label">File Path</label>
                 <input
                   className="form-input"
-                  placeholder="/path/to/local/file.txt"
+                  placeholder="config.yaml"
                   value={filePath}
                   onChange={(e) => setFilePath(e.target.value)}
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Path to a local file on the filesystem
+                  A file in the Wagon imports folder (<code>/data/imports</code>). Put the file there first.
                 </div>
               </div>
 
@@ -131,7 +131,8 @@ function StoreAddFile() {
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  URL to a remote file to download
+                  An <code>http://</code> or <code>https://</code> URL. Wagon downloads it itself and refuses
+                  loopback, link-local and private addresses unless the admin allows them.
                 </div>
               </div>
 
@@ -145,7 +146,8 @@ function StoreAddFile() {
                   disabled={loading}
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Rewrite the name of the file when storing (defaults to original filename)
+                  Rewrite the name of the file when storing (defaults to the last part of the URL path).
+                  Required when the URL path has no file name.
                 </div>
               </div>
 
@@ -169,7 +171,7 @@ function StoreAddFile() {
                 <strong style={{ color: 'var(--accent-amber)' }}>Local file:</strong>
               </p>
               <code style={{ display: 'block', padding: '0.4rem', backgroundColor: 'var(--bg-primary)', border: '1px solid var(--border-color)', fontSize: '0.75rem' }}>
-                /path/to/file.txt
+                config.yaml (in /data/imports)
               </code>
 
               <p style={{ marginBottom: '0.75rem', marginTop: '1rem' }}>

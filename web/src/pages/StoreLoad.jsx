@@ -139,7 +139,7 @@ function StoreLoad() {
               <div className="form-group">
                 <label className="form-label">Archive File Paths (-f/--filename)</label>
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                  Specify one or more archive files to load. Defaults to <code>haul.tar.zst</code>.
+                  A plain file name is an archive in this haul&apos;s archives folder; any other path must be a file in <code>/data/imports</code>. Defaults to <code>haul.tar.zst</code>.
                 </div>
                 {fileList.map((file, index) => (
                   <div key={index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>

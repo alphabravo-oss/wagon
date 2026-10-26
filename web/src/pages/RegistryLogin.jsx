@@ -40,7 +40,7 @@ function RegistryLogin() {
         throw new Error(data.message || 'Login request failed')
       }
 
-      setSuccessMessage(`Login job started for ${registry}`)
+      setSuccessMessage(`Login job started for ${registry}. The credentials are saved, not verified.`)
       setRegistry('')
       setUsername('')
       setPassword('')
@@ -149,6 +149,10 @@ function RegistryLogin() {
           <button type="submit" className="btn btn-primary" disabled={loading}>
             {loading ? 'Starting Login...' : 'Login'}
           </button>
+          <p style={{ color: 'var(--text-secondary)', fontSize: '0.85rem', marginTop: '0.75rem' }}>
+            Login saves the credentials without checking them with the registry. A wrong
+            password shows up later, when a pull or push fails.
+          </p>
         </form>
       </div>
 

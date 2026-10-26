@@ -199,6 +199,18 @@ Wagon is configured via environment variables.
 | `HAULER_UI_LOGIN_RATE` | `5` | Max login attempts per minute per client IP (429 beyond) |
 | `HAULER_UI_TRUST_PROXY` | `false` | When true, trust the rightmost `X-Forwarded-For` hop for login rate-limit IP keying (only behind a trusted reverse proxy) |
 
+### Add File URL Downloads
+
+Wagon downloads an Add File `url` itself and hands hauler the local copy. It
+connects directly (no HTTP proxy) and checks the address of every connection,
+redirects included. See `docs/persistence.md`.
+
+| Variable | Default | Description |
+|----------|---------|-------------|
+| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Comma-separated private ranges an Add File url may reach, such as `10.20.0.0/16`. Without it, RFC 1918, CGNAT `100.64.0.0/10` and IPv6 `fc00::/7` are refused. Loopback, link-local (including `169.254.169.254`), multicast and reserved addresses are always refused |
+| `HAULER_UI_FETCH_MAX_BYTES` | `2147483648` (2 GiB) | Max size of one Add File url download |
+| `HAULER_UI_FETCH_TIMEOUT` | `30m` | Max time for one Add File url download, redirects included (Go duration) |
+
 ### Published Registry / Files (the multi-haul front door)
 
 | Variable | Default | Description |

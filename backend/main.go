@@ -140,10 +140,12 @@ func main() {
 
 	// Reset state left over from a previous run before anything starts.
 	cleanupOnBoot(db.DB)
+	store.RemoveStaleDownloads(cfg.DataDir)
 
 	// Initialize job runner
 	jobRunner := jobrunner.New(db.DB, cfg.DataDir)
 	jobHandler := jobrunner.NewHandler(jobRunner, cfg)
+	store.RemoveStaleManifests(context.Background(), jobRunner, cfg.HaulerTempDir)
 
 	// The background job processor is started later, once the publish manager
 	// exists, so it can also report published-haul metrics.

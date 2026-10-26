@@ -4,8 +4,122 @@ All notable changes to Wagon will be documented in this file.
 
 ## [Unreleased]
 
+### Security
+
+- Serve no longer passes caller-chosen paths straight to hauler, which runs as
+  root. `directory` on `POST /api/serve/registry` and `/api/serve/fileserver`
+  must be a folder inside the haul's own folder and outside its store; before,
+  `{"directory":"/etc"}` served `/etc` and let file artifacts overwrite files
+  there. `tlsCert` and `tlsKey` must be files in `<data>/certs`. Relative paths
+  are taken from those folders, symlinks are resolved before the check, and
+  anything else gets HTTP 400 before hauler starts. Serve request bodies are
+  capped at 64 KiB (HTTP 413).
+- Store endpoints reject values that hauler takes as positional arguments
+  (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
+  they start with `-`, with HTTP 400.
+- Add File, Extract and Copy no longer let a signed-in user make hauler,
+  which runs as root, read or write any host path. `filePath` on
+  `POST /api/store/add-file` must be a file in `<data>/imports`; before,
+  `/etc/shadow` or `app.db` could be added to the store and served on the
+  unauthenticated serve port. `url` must be an `http://` or `https://` URL
+  with a host, and Wagon now downloads it itself and gives hauler only the
+  downloaded file: hauler's file getter opened `filepath.Join(host, path)`
+  on disk whatever the scheme, so `http://x/../../etc/host_secret.txt`,
+  `http://app.db` and `http://.docker` read host files (`url` also took bare
+  paths and `file://`). `outputDir` on
+  `POST /api/store/extract` and a `dir://` target on `POST /api/store/copy`
+  must be folders inside the haul's own folder, outside its `store`, `archives`
+  and `registry` folders; before, `{"outputDir":"/etc/cron.d"}` wrote artifact
+  content there as root. Extract without `outputDir` now writes to
+  `<haul>/extracted` instead of the data folder itself. The add-file `name`
+  must not contain `/` or `\` and must not be `.` or `..`. All of these get
+  HTTP 400 before hauler starts. Local files for Add File now go in
+  `<data>/imports` first (see `docs/persistence.md`).
+- Add File `url` downloads can no longer reach Wagon's host or internal
+  network (SSRF). Every connection, including each redirect hop, is checked
+  against its resolved address. Loopback, link-local (including the
+  `169.254.169.254` cloud metadata address), unspecified, multicast and
+  reserved addresses are always refused. Private ranges (RFC 1918, CGNAT
+  `100.64.0.0/10`, IPv6 `fc00::/7`) are refused unless listed in the new
+  `HAULER_UI_FETCH_ALLOW_CIDRS`. Downloads are capped at
+  `HAULER_UI_FETCH_MAX_BYTES` (default 2 GiB) and `HAULER_UI_FETCH_TIMEOUT`
+  (default `30m`), and only `http` and `https` are followed. Before, a
+  signed-in user could make Wagon fetch the metadata service or other
+  internal hosts and serve the response from the store.
+- Sync and Load no longer let a signed-in user put root-only host files into
+  a store, where the unauthenticated serve port then served them (card 69).
+  A Sync `Files` manifest naming `/etc/host_canary.txt` (mode `0600`) added it
+  to the store; a manifest planted through Import in the haul's `archives`
+  folder made this reliable. Wagon now parses every Sync manifest and refuses
+  any local path in it outside `<data>/imports`, the way hauler resolves it
+  (relative to the data folder, URL-decoded, symlinks followed): `Files`
+  paths, `ImageTxts` refs, charts helm would load from disk, and image cosign
+  keys. Sync `filenames` must be files in `<data>/imports`. Load used any
+  absolute archive path as-is and now takes a plain archive name from the
+  haul's `archives` folder or a file in `<data>/imports`. All of these get
+  HTTP 400 before hauler starts, and a refused Load no longer clears the
+  store first. hauler now reads a checked copy of the manifest with a unique
+  name, deleted when the job ends; before, the pasted-manifest file always had
+  the same name and was deleted before the queued job could read it.
+  Sync also refuses `products` and `productRegistry` (HTTP 400, any key
+  casing, any value): for each product hauler pulled
+  `<productRegistry>/hauler/<name>-manifest.yaml` from a registry the caller
+  picked and ran it unchecked, which brought the host file read back. The
+  checked copy keeps unquoted numbers as written (`version: 1.10` used to
+  become `1.1`), and copies left by a stop mid-job are deleted at the next
+  start, except one a queued job still needs.
+- A Sync manifest's cosign key (`spec.images[].key` or the `hauler.dev/key`
+  annotation) must be a regular file in `<data>/imports` or `<data>/certs`
+  (card 111). `<data>/certs` is also the folder for the request's `key` once
+  card 68 lands, so one key file can serve both. A folder or a missing file gets HTTP 400 before a job
+  exists; before, a folder in imports passed the check. `Files` paths and every
+  other local path in a manifest still have to be in `<data>/imports`.
+- A Sync manifest's `http://` or `https://` `Files` path or `ImageTxts` ref
+  gets HTTP 400 when `filepath.Join(host, path)` could name something in or
+  above the data folder by the time the queued job runs: a first element that
+  starts with `.` (`.docker`, `..`), that exists in `<data>`, or that Wagon
+  creates there (`certs`, `hauls`, `imports`, `registry-tls`, `store`, `tmp`,
+  the database and the configured store, temp and login paths). hauler reads
+  that local form whenever it exists, so `https://certs/registry.key` passed
+  the check while Serve's TLS key did not exist yet and read it once it did
+  (card 111, review 101). A Charts or ThickCharts `repoURL` must be an
+  `http`, `https` or `oci://` URL or a relative path; `file:` URLs in any case
+  and absolute paths get HTTP 400.
+- Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
+  JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
+  messages no longer include absolute data-folder paths.
+- Serve no longer accepts `configFile` on `POST /api/serve/registry`. hauler's
+  `--config` overrides every other flag, so a caller's config file could make a
+  read-only registry writable and point its storage at any path in the
+  container. A request that still sends `configFile` (any value) now gets HTTP
+  400 instead of starting hauler, and the Serve page no longer has a Config File
+  field. Wagon-generated config for Publishing is unchanged.
+
 ### Changed — secure defaults (breaking)
 
+- Add File takes local files only from `<data>/imports`, and its `url` only as
+  `http://` or `https://`. Wagon downloads the url itself, directly: it
+  ignores `HTTP_PROXY`/`HTTPS_PROXY`, refuses private addresses unless
+  `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and needs a `name` when the URL
+  path has no file name (HTTP 400). Extract and Copy write only inside the
+  haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
+  Requests that used other paths now get HTTP 400 (see Security above).
+- **Breaking:** Sync reads manifest files only from `<data>/imports` (no
+  manifest URLs in `filenames`), and every local path inside a manifest must
+  be there too. A relative filename,
+  including the default `hauler-manifest.yaml`, is now taken from
+  `<data>/imports` instead of the data folder. Manifests may only contain
+  `Files`, `Images`, `Charts`, `ThickCharts` and `ImageTxts` documents, and
+  image keys must be files in `<data>/imports` or `<data>/certs` (no `~`
+  paths or KMS URIs).
+  Load takes a plain archive name from the haul's `archives` folder, as the
+  haul page's Load button sends, and any other path only from
+  `<data>/imports`; a relative path such as `sub/a.tar.zst` is now taken
+  from `<data>/imports`. Move manifests, the files they name and archives to
+  load into `<data>/imports` (see `docs/persistence.md`).
+- **Breaking:** Sync no longer takes `products` or `productRegistry`, and the
+  Sync page drops both fields. Put a product's manifest in `<data>/imports`
+  and sync that file instead.
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The
   explicit, off-by-default `HAULER_UI_INSECURE_NO_AUTH=true` restores the old
   no-auth behaviour for throwaway local use and logs a warning.
@@ -26,6 +140,8 @@ All notable changes to Wagon will be documented in this file.
 - Moved repository references to `github.com/alphabravo-oss/wagon` and release
   images to `ghcr.io/alphabravo-oss/wagon`.
 - Replaced the application logo, wordmark, and favicon with the Wagon branding.
+- Renamed the haul page's **Publish** tab to **Client Access** so it no longer
+  shares a name with the **Publishing** page.
 
 ### Removed
 
@@ -36,6 +152,13 @@ All notable changes to Wagon will be documented in this file.
 
 ### Fixed
 
+- Registry login now sends the username and password to hauler. It runs
+  `hauler login <registry> -u <user> --password-stdin`, and the password goes
+  only to stdin: it is not in the process arguments, the environment, the job
+  row or the job log. Before, Wagon set `HAULER_REGISTRY_USERNAME`/`PASSWORD`
+  env vars that hauler 1.3.2 does not read, and stored the password in the job
+  row. hauler saves credentials without checking them, so the UI and API now
+  say the login was saved, not verified; a wrong password fails at pull or push.
 - Starting a registry serve on an empty haul no longer fails with HTTP 500
   (`stat …/index.json: no such file or directory`); it starts with an empty
   catalog. New hauls get an empty `index.json`, and existing empty hauls get one

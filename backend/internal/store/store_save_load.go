@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -13,7 +14,9 @@ import (
 	"strings"
 	"time"
 
+	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
+	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
 // SaveRequest represents the request to save the store to an archive
@@ -46,8 +49,7 @@ func (h *Handler) Save(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SaveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -154,13 +156,16 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ExtractRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
 	if req.ArtifactRef == "" {
 		http.Error(w, "artifactRef is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("artifactRef", req.ArtifactRef); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -170,13 +175,17 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build args for hauler store extract command
-	args := []string{"store", "extract", req.ArtifactRef}
-
-	// Optional output directory
-	if req.OutputDir != "" {
-		args = append(args, "--output", req.OutputDir)
+	// hauler writes as root, so the output folder stays inside the haul's
+	// folder. Without one, it used to write into hauler's working folder, the
+	// data folder itself.
+	outputDir, err := haulOutputDir(haul, "outputDir", cmp.Or(req.OutputDir, "extracted"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+
+	// Build args for hauler store extract command
+	args := []string{"store", "extract", req.ArtifactRef, "--output", outputDir}
 
 	// Scope to this haul's store.
 	args = append(args, storeArgs...)
@@ -190,7 +199,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 	h.tagJobHaul(r.Context(), job.ID, haul.ID)
 
 	// Record the output directory on success.
-	go h.trackExtractResult(job.ID, req.OutputDir)
+	go h.trackExtractResult(job.ID, outputDir)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -198,7 +207,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		"jobId":       job.ID,
 		"message":     "Extract job started",
 		"artifactRef": req.ArtifactRef,
-		"outputDir":   req.OutputDir,
+		"outputDir":   outputDir,
 		"haulId":      haul.ID,
 	})
 }
@@ -216,11 +225,7 @@ func (h *Handler) trackExtractResult(jobID int64, outputDir string) {
 		}
 		switch job.Status {
 		case jobrunner.StatusSucceeded:
-			resultOutputDir := outputDir
-			if resultOutputDir == "" {
-				resultOutputDir = "."
-			}
-			resultJSON, _ := json.Marshal(map[string]interface{}{"outputDir": resultOutputDir})
+			resultJSON, _ := json.Marshal(map[string]interface{}{"outputDir": outputDir})
 			_ = h.JobRunner.UpdateResult(ctx, jobID, string(resultJSON))
 			return
 		case jobrunner.StatusFailed:
@@ -237,8 +242,7 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -250,6 +254,24 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// hauler loads each archive as root. A plain file name is an archive in
+	// the haul's own archives folder (the haul page's Load button sends one);
+	// any other path must be a file in <DataDir>/imports.
+	filenames := req.Filenames
+	if len(filenames) == 0 {
+		http.Error(w, "at least one filename is required", http.StatusBadRequest)
+		return
+	}
+	resolved := make([]string, 0, len(filenames))
+	for i, f := range filenames {
+		p, err := h.loadArchive(haul, fmt.Sprintf("filenames[%d]", i), f)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		resolved = append(resolved, p)
+	}
+
 	// Clear this haul's store if requested.
 	if req.Clear {
 		if err := h.clearStore(haul.StoreDir); err != nil {
@@ -259,22 +281,6 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		}
 		if _, err := h.JobRunner.DB().ExecContext(ctx, `DELETE FROM store_contents WHERE haul_id = ?`, haul.ID); err != nil {
 			log.Printf("Warning: failed to clear tracked contents for haul %d: %v", haul.ID, err)
-		}
-	}
-
-	// Determine archives to load. Bare filenames are resolved against the haul's
-	// archives directory; absolute paths are used as-is.
-	filenames := req.Filenames
-	if len(filenames) == 0 {
-		http.Error(w, "at least one filename is required", http.StatusBadRequest)
-		return
-	}
-	resolved := make([]string, 0, len(filenames))
-	for _, f := range filenames {
-		if filepath.IsAbs(f) {
-			resolved = append(resolved, f)
-		} else {
-			resolved = append(resolved, filepath.Join(haul.ArchivesDir(), f))
 		}
 	}
 
@@ -328,6 +334,20 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 		"cleared":   req.Clear,
 		"haulId":    haul.ID,
 	})
+}
+
+// loadArchive confines a Load filename named in field: a plain file name to an
+// archive in the haul's archives folder, anything else to a file in
+// <DataDir>/imports. The error names no host path.
+func (h *Handler) loadArchive(haul *hauls.Haul, field, f string) (string, error) {
+	if !validFileName(f) {
+		return h.importFile(field, f)
+	}
+	p, err := safepath.ConfineFile(haul.ArchivesDir(), f)
+	if err != nil {
+		return "", fmt.Errorf("%s must be an archive in the haul's archives folder, or a path to a file in Wagon's imports folder (<data>/imports): %w", field, err)
+	}
+	return p, nil
 }
 
 // Import handles POST /api/store/import. It accepts a .tar.zst upload, saves it

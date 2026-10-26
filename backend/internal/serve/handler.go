@@ -1,6 +1,7 @@
 package serve
 
 import (
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -173,14 +174,33 @@ func (h *Handler) portInUse(port int) bool {
 
 // ServeRegistryRequest represents the request to start a registry serve
 type ServeRegistryRequest struct {
-	HaulID     int64  `json:"haulId,omitempty"`
-	Port       int    `json:"port,omitempty"`
-	Readonly   *bool  `json:"readonly,omitempty"` // nil (missing) means read-only
-	TLSCert    string `json:"tlsCert,omitempty"`
-	TLSKey     string `json:"tlsKey,omitempty"`
-	AutoTLS    bool   `json:"autoTls,omitempty"`
-	Directory  string `json:"directory,omitempty"`
-	ConfigFile string `json:"configFile,omitempty"`
+	HaulID    int64  `json:"haulId,omitempty"`
+	Port      int    `json:"port,omitempty"`
+	Readonly  *bool  `json:"readonly,omitempty"` // nil (missing) means read-only
+	TLSCert   string `json:"tlsCert,omitempty"`
+	TLSKey    string `json:"tlsKey,omitempty"`
+	AutoTLS   bool   `json:"autoTls,omitempty"`
+	Directory string `json:"directory,omitempty"`
+}
+
+// errConfigFileRemoved answers a registry request that still sends configFile.
+// hauler's --config overrides every other flag (readonly, store, port, storage
+// path), so Wagon no longer accepts a caller's config file.
+const errConfigFileRemoved = "configFile is no longer supported: Wagon sets the registry configuration itself; remove configFile from the request"
+
+// hasField reports whether the JSON object in body has the key name, matched
+// case-insensitively as encoding/json matches struct fields, whatever its value.
+func hasField(body []byte, name string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&fields); err != nil {
+		return false
+	}
+	for key := range fields {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
 }
 
 // ServeFileserverRequest represents the request to start a fileserver serve
@@ -202,8 +222,12 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ServeRegistryRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	body, ok := decodeServeRequest(w, r, &req)
+	if !ok {
+		return
+	}
+	if hasField(body, "configFile") {
+		http.Error(w, errConfigFileRemoved, http.StatusBadRequest)
 		return
 	}
 
@@ -211,6 +235,16 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	haul, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
 		http.Error(w, "Failed to resolve haul: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Pin caller-supplied paths before hauler, which runs as root, sees them.
+	// Auto TLS ignores tlsCert and tlsKey.
+	if req.AutoTLS {
+		req.TLSCert, req.TLSKey = "", ""
+	}
+	if req.Directory, req.TLSCert, req.TLSKey, err = h.servePaths(haul, req.Directory, req.TLSCert, req.TLSKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -276,11 +310,6 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 	// Optional directory
 	if req.Directory != "" {
 		args = append(args, "--directory", req.Directory)
-	}
-
-	// Optional config file
-	if req.ConfigFile != "" {
-		args = append(args, "--config", req.ConfigFile)
 	}
 
 	// Start the process
@@ -734,8 +763,7 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ServeFileserverRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	if _, ok := decodeServeRequest(w, r, &req); !ok {
 		return
 	}
 
@@ -743,6 +771,16 @@ func (h *Handler) ServeFileserver(w http.ResponseWriter, r *http.Request) {
 	haul, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
 		http.Error(w, "Failed to resolve haul: "+err.Error(), http.StatusBadRequest)
+		return
+	}
+
+	// Pin caller-supplied paths before hauler, which runs as root, sees them.
+	// Auto TLS ignores tlsCert and tlsKey.
+	if req.AutoTLS {
+		req.TLSCert, req.TLSKey = "", ""
+	}
+	if req.Directory, req.TLSCert, req.TLSKey, err = h.servePaths(haul, req.Directory, req.TLSCert, req.TLSKey); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

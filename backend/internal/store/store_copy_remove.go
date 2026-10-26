@@ -31,8 +31,7 @@ func (h *Handler) Copy(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req CopyRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -53,8 +52,20 @@ func (h *Handler) Copy(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// A dir:// target is a folder hauler writes into as root, so it stays
+	// inside the haul's folder.
+	target := req.Target
+	if dir, ok := strings.CutPrefix(target, "dir://"); ok {
+		resolved, err := haulOutputDir(haul, "dir:// target", dir)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		target = "dir://" + resolved
+	}
+
 	// Build args for hauler store copy command
-	args := []string{"store", "copy", req.Target}
+	args := []string{"store", "copy", target}
 
 	// Optional insecure flag
 	if req.Insecure {
@@ -87,7 +98,7 @@ func (h *Handler) Copy(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"jobId":   job.ID,
 		"message": "Copy job started",
-		"target":  req.Target,
+		"target":  target,
 		"haulId":  haul.ID,
 	})
 }
@@ -100,13 +111,16 @@ func (h *Handler) Remove(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req RemoveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
 	if req.Match == "" {
 		http.Error(w, "match is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("match", req.Match); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 

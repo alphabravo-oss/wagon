@@ -2,6 +2,7 @@ package jobrunner
 
 import (
 	"bufio"
+	"bytes"
 	"context"
 	"database/sql"
 	"encoding/json"
@@ -71,6 +72,33 @@ func (r *Runner) DB() *sql.DB {
 
 // CreateJob creates a new job in the database
 func (r *Runner) CreateJob(ctx context.Context, command string, args []string, envOverrides map[string]string) (*Job, error) {
+	return r.createJob(ctx, command, args, envOverrides, StatusQueued)
+}
+
+// CreateStdinJob creates a job and starts it at once with stdin as the
+// command's standard input, for secrets such as a registry password read by
+// --password-stdin. stdin stays in memory: it is never stored with the job,
+// put in argv or env, or logged. The job is created as running, so the job
+// processor (which has no stdin to give) never starts it. The command runs
+// under a background context, so it outlives the request that created it.
+// If the command cannot start, the job is marked failed with the error in its
+// log, like any other job.
+func (r *Runner) CreateStdinJob(ctx context.Context, command string, args []string, stdin []byte) (*Job, error) {
+	job, err := r.createJob(ctx, command, args, nil, StatusRunning)
+	if err != nil {
+		return nil, err
+	}
+	bg := context.Background()
+	if _, err := r.start(bg, job.ID, stdin); err != nil {
+		_ = r.appendLog(bg, job.ID, "stderr", err.Error())
+		completedAt := time.Now()
+		exitCode := -1
+		_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+	}
+	return job, nil
+}
+
+func (r *Runner) createJob(ctx context.Context, command string, args []string, envOverrides map[string]string, status JobStatus) (*Job, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
@@ -89,7 +117,7 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 		`INSERT INTO jobs (command, args, env_overrides, status)
 		 VALUES (?, ?, ?, ?)
 		 RETURNING id`,
-		command, string(argsJSON), string(envJSON), StatusQueued,
+		command, string(argsJSON), string(envJSON), status,
 	).Scan(&jobID)
 	if err != nil {
 		return nil, fmt.Errorf("inserting job: %w", err)
@@ -99,22 +127,76 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 		ID:      jobID,
 		Command: command,
 		Args:    args,
-		Status:  StatusQueued,
+		Status:  status,
 	}, nil
 }
 
 // Start executes a job and updates its state
 func (r *Runner) Start(ctx context.Context, jobID int64) error {
+	_, err := r.start(ctx, jobID, nil)
+	return err
+}
+
+// Prepare is Go-side work a prepared job does before its command runs, such as
+// a download. logf adds a line to the job's log. An error fails the job without
+// running the command.
+type Prepare func(ctx context.Context, logf func(string)) error
+
+// CreatePreparedJob creates a job that runs prepare and then the command. The
+// job is "running" from the start, so the job processor never starts it; it
+// still counts towards the concurrency limit. cleanup, if not nil, runs once the
+// job has ended, whether it succeeded or not.
+func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []string, prepare Prepare, cleanup func()) (*Job, error) {
+	job, err := r.CreateJob(ctx, command, args, nil)
+	if err != nil {
+		return nil, err
+	}
+	now := time.Now()
+	if err := r.updateStatus(ctx, job.ID, StatusRunning, &now, nil, nil); err != nil {
+		return nil, fmt.Errorf("updating status to running: %w", err)
+	}
+	job.Status = StatusRunning
+
+	go func() {
+		if cleanup != nil {
+			defer cleanup()
+		}
+		bg := context.Background()
+		fail := func(msg string) {
+			_ = r.appendLog(bg, job.ID, "stderr", msg)
+			completedAt := time.Now()
+			exitCode := -1
+			_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+		}
+		logf := func(msg string) { _ = r.appendLog(bg, job.ID, "stdout", msg) }
+		if err := prepare(bg, logf); err != nil {
+			fail(err.Error())
+			return
+		}
+		done, err := r.start(bg, job.ID, nil)
+		if err != nil {
+			fail(err.Error())
+			return
+		}
+		<-done
+	}()
+	return job, nil
+}
+
+// start runs a job's command. A nil stdin gives the command an empty stdin.
+// The returned channel is closed once the command has exited and its final
+// status is stored.
+func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan struct{}, error) {
 	// Get job details
 	job, err := r.GetJob(ctx, jobID)
 	if err != nil {
-		return fmt.Errorf("getting job: %w", err)
+		return nil, fmt.Errorf("getting job: %w", err)
 	}
 
 	// Update status to running
 	now := time.Now()
 	if err := r.updateStatus(ctx, jobID, StatusRunning, &now, nil, nil); err != nil {
-		return fmt.Errorf("updating status to running: %w", err)
+		return nil, fmt.Errorf("updating status to running: %w", err)
 	}
 
 	// Build environment - start with current env and add overrides
@@ -132,16 +214,19 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 	cmd := exec.CommandContext(ctx, job.Command, job.Args...)
 	cmd.Env = env
 	cmd.Dir = r.workDir
+	if stdin != nil {
+		cmd.Stdin = bytes.NewReader(stdin)
+	}
 
 	// Get pipes for stdout and stderr
 	stdout, err := cmd.StdoutPipe()
 	if err != nil {
-		return fmt.Errorf("creating stdout pipe: %w", err)
+		return nil, fmt.Errorf("creating stdout pipe: %w", err)
 	}
 
 	stderr, err := cmd.StderrPipe()
 	if err != nil {
-		return fmt.Errorf("creating stderr pipe: %w", err)
+		return nil, fmt.Errorf("creating stderr pipe: %w", err)
 	}
 
 	// Start the command
@@ -149,7 +234,7 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 		completedAt := time.Now()
 		exitCode := -1
 		_ = r.updateStatus(ctx, jobID, StatusFailed, &now, &completedAt, &exitCode)
-		return fmt.Errorf("starting command: %w", err)
+		return nil, fmt.Errorf("starting command: %w", err)
 	}
 
 	// Both pipes must be fully drained BEFORE cmd.Wait() runs: os/exec closes the
@@ -167,12 +252,14 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 		r.streamOutput(ctx, jobID, stderr, "stderr")
 	}()
 
+	done := make(chan struct{})
 	go func() {
+		defer close(done)
 		streams.Wait()
 		r.monitorCompletion(ctx, jobID, cmd)
 	}()
 
-	return nil
+	return done, nil
 }
 
 // monitorCompletion waits for the command to finish and updates the job status

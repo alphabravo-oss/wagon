@@ -57,21 +57,21 @@ describe('StoreAddFile', () => {
 
   it('POSTs the file source, custom name and active haul, then opens the job', async () => {
     await renderForm()
-    fireEvent.change(screen.getByPlaceholderText('/path/to/local/file.txt'), { target: { value: '/tmp/config.yaml' } })
+    fireEvent.change(screen.getByPlaceholderText('config.yaml'), { target: { value: 'config.yaml' } })
     fireEvent.change(screen.getByPlaceholderText('custom-filename.txt'), { target: { value: 'config.yaml' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add File to Store' }))
     expect(await screen.findByRole('heading', { name: 'File import job' })).toBeInTheDocument()
     expect(fetchMock).toHaveBeenCalledWith('/api/store/add-file', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ haulId: 7, filePath: '/tmp/config.yaml', name: 'config.yaml' }),
+      body: JSON.stringify({ haulId: 7, filePath: 'config.yaml', name: 'config.yaml' }),
     })
   })
 
   it('rejects simultaneous file path and URL without sending a store request', async () => {
     await renderForm()
     expect(screen.getByRole('button', { name: 'Add File to Store' })).toBeDisabled()
-    fireEvent.change(screen.getByPlaceholderText('/path/to/local/file.txt'), { target: { value: '/tmp/file.txt' } })
+    fireEvent.change(screen.getByPlaceholderText('config.yaml'), { target: { value: '/tmp/file.txt' } })
     fireEvent.change(screen.getByPlaceholderText('https://example.com/file.txt'), { target: { value: 'https://example.com/file.txt' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add File to Store' }))
     expect(await screen.findByText('Please provide either a file path or URL, not both')).toBeInTheDocument()
@@ -82,11 +82,11 @@ describe('StoreAddFile', () => {
   it('shows an API error and leaves the form available to retry', async () => {
     addFileResponse = response({ message: 'File not found' }, false)
     await renderForm()
-    fireEvent.change(screen.getByPlaceholderText('/path/to/local/file.txt'), { target: { value: '/missing.txt' } })
+    fireEvent.change(screen.getByPlaceholderText('config.yaml'), { target: { value: '/missing.txt' } })
     fireEvent.click(screen.getByRole('button', { name: 'Add File to Store' }))
     expect(await screen.findByText('File not found')).toBeInTheDocument()
     expect(screen.getByRole('button', { name: 'Add File to Store' })).toBeEnabled()
-    expect(screen.getByPlaceholderText('/path/to/local/file.txt')).toHaveValue('/missing.txt')
+    expect(screen.getByPlaceholderText('config.yaml')).toHaveValue('/missing.txt')
     expect(screen.queryByRole('heading', { name: 'File import job' })).not.toBeInTheDocument()
   })
 })

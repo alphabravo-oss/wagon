@@ -136,7 +136,7 @@ function StoreCopy() {
                 <label className="form-label">Target</label>
                 <input
                   className="form-input"
-                  placeholder="registry://docker.io/my-org or dir:///path/to/export"
+                  placeholder="registry://docker.io/my-org or dir://export"
                   value={target}
                   onChange={(e) => setTarget(e.target.value)}
                   disabled={submitting}
@@ -270,12 +270,11 @@ function StoreCopy() {
                 <strong style={{ color: 'var(--accent-amber)' }}>Directory:</strong>
               </p>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '0.75rem' }}>
-                <code>dir:///data/export</code><br/>
-                <code>dir://./local-export</code>
+                <code>dir://export</code>
               </p>
 
               <p style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.5rem', marginBottom: 0 }}>
-                For directory targets, the path must be accessible to the hauler process.
+                A directory target must be a folder inside this haul folder, outside its store.
               </p>
             </div>
           </div>

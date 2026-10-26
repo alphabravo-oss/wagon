@@ -577,3 +577,181 @@ func TestJobExecutionWithLongLine(t *testing.T) {
 		}
 	}
 }
+
+func TestCreatePreparedJob(t *testing.T) {
+	db := setupTestDB(t)
+	runner := New(db, t.TempDir())
+	ctx := context.Background()
+	echoPath, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip("echo command not found")
+	}
+
+	for _, tc := range []struct {
+		name       string
+		prepareErr error
+		wantStatus JobStatus
+		wantLog    string
+	}{
+		{"prepare ok", nil, StatusSucceeded, "ran-command"},
+		{"prepare fails", errors.New("download failed: blocked"), StatusFailed, "download failed: blocked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := make(chan struct{})
+			job, err := runner.CreatePreparedJob(ctx, echoPath, []string{"ran-command"},
+				func(_ context.Context, logf func(string)) error {
+					logf("preparing")
+					return tc.prepareErr
+				},
+				func() { close(cleaned) })
+			if err != nil {
+				t.Fatalf("CreatePreparedJob: %v", err)
+			}
+			if job.Status != StatusRunning {
+				t.Errorf("new job status %s, want running so the job processor skips it", job.Status)
+			}
+			select {
+			case <-cleaned:
+			case <-time.After(5 * time.Second):
+				t.Fatal("cleanup did not run")
+			}
+			got, err := runner.GetJob(ctx, job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != tc.wantStatus {
+				t.Errorf("status %s, want %s", got.Status, tc.wantStatus)
+			}
+			logs, _ := runner.GetLogs(ctx, job.ID, nil)
+			var all []string
+			for _, l := range logs {
+				all = append(all, l.Content)
+			}
+			if joined := strings.Join(all, "\n"); !strings.Contains(joined, "preparing") || !strings.Contains(joined, tc.wantLog) {
+				t.Errorf("logs %q, want %q and %q", joined, "preparing", tc.wantLog)
+			}
+		})
+	}
+}
+
+// waitForEnd polls until the job has succeeded or failed.
+func waitForEnd(t *testing.T, runner *Runner, jobID int64) *Job {
+	t.Helper()
+	deadline := time.Now().Add(5 * time.Second)
+	for time.Now().Before(deadline) {
+		job, err := runner.GetJob(context.Background(), jobID)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if job.Status == StatusSucceeded || job.Status == StatusFailed {
+			return job
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	t.Fatalf("timed out waiting for job %d to end", jobID)
+	return nil
+}
+
+func logText(t *testing.T, runner *Runner, jobID int64) string {
+	t.Helper()
+	logs, err := runner.GetLogs(context.Background(), jobID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var b strings.Builder
+	for _, l := range logs {
+		b.WriteString(l.Content + "\n")
+	}
+	return b.String()
+}
+
+func TestCreateStdinJobFeedsStdin(t *testing.T) {
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.CreateStdinJob(context.Background(), "/bin/sh", []string{"-c", "tr a-z A-Z"}, []byte("hello stdin"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	// Created as running, so the job processor never starts it a second time without stdin.
+	if job.Status != StatusRunning {
+		t.Errorf("status %q, want %q", job.Status, StatusRunning)
+	}
+	if end := waitForEnd(t, runner, job.ID); end.Status != StatusSucceeded {
+		t.Fatalf("job %s, logs:\n%s", end.Status, logText(t, runner, job.ID))
+	}
+	if out := logText(t, runner, job.ID); out != "HELLO STDIN\n" {
+		t.Errorf("output %q, want %q", out, "HELLO STDIN\n")
+	}
+}
+
+func TestStartGivesEmptyStdin(t *testing.T) {
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.CreateJob(context.Background(), "/bin/sh", []string{"-c", "cat; echo done"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	if end := waitForEnd(t, runner, job.ID); end.Status != StatusSucceeded {
+		t.Fatalf("job %s", end.Status)
+	}
+	if out := logText(t, runner, job.ID); out != "done\n" {
+		t.Errorf("output %q, want %q", out, "done\n")
+	}
+}
+
+// The stdin secret must reach the command but never its argv, its env, the
+// stored job row or the job log.
+func TestCreateStdinJobSecretNotInArgvEnvOrLogs(t *testing.T) {
+	if _, err := os.Stat("/proc/self/cmdline"); err != nil {
+		t.Skip("needs /proc")
+	}
+	db := setupTestDB(t)
+	runner := New(db, t.TempDir())
+	secret := fmt.Sprintf("stdin-secret-%d", time.Now().UnixNano())
+
+	// Echo stdin uppercased (proves delivery without logging the secret), then
+	// the shell's own argv and environment as the kernel sees them.
+	script := `tr a-z A-Z; echo; echo CMDLINE; tr '\0' '\n' < /proc/$$/cmdline; echo ENVIRON; tr '\0' '\n' < /proc/$$/environ`
+	job, err := runner.CreateStdinJob(context.Background(), "/bin/sh", []string{"-c", script}, []byte(secret))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end := waitForEnd(t, runner, job.ID); end.Status != StatusSucceeded {
+		t.Fatalf("job %s", end.Status)
+	}
+
+	out := logText(t, runner, job.ID)
+	if !strings.Contains(out, strings.ToUpper(secret)) {
+		t.Fatalf("stdin did not reach the command; output:\n%s", out)
+	}
+	if !strings.Contains(out, "CMDLINE\n/bin/sh\n-c\n") || !strings.Contains(out, "ENVIRON\n") {
+		t.Fatalf("expected argv and env dumps in output:\n%s", out)
+	}
+	if strings.Contains(out, secret) {
+		t.Error("secret appears in argv, env or job output")
+	}
+
+	var args, env sql.NullString
+	if err := db.QueryRow(`SELECT args, env_overrides FROM jobs WHERE id = ?`, job.ID).Scan(&args, &env); err != nil {
+		t.Fatal(err)
+	}
+	if strings.Contains(args.String, secret) || strings.Contains(env.String, secret) {
+		t.Error("secret stored in the job row")
+	}
+}
+
+func TestCreateStdinJobStartFailureFailsJob(t *testing.T) {
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.CreateStdinJob(context.Background(), "/nonexistent/wagon-test-cmd", nil, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	end := waitForEnd(t, runner, job.ID)
+	if end.Status != StatusFailed {
+		t.Errorf("status %q, want %q", end.Status, StatusFailed)
+	}
+	if out := logText(t, runner, job.ID); !strings.Contains(out, "starting command") {
+		t.Errorf("expected start error in log, got %q", out)
+	}
+}

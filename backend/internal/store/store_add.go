@@ -1,9 +1,17 @@
 package store
 
 import (
+	"cmp"
+	"context"
 	"encoding/json"
+	"fmt"
 	"log"
 	"net/http"
+	"net/url"
+	"os"
+	"path"
+
+	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 )
 
 // AddImageRequest represents the request to add an image to the store
@@ -29,13 +37,16 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddImageRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
 	if req.ImageRef == "" {
 		http.Error(w, "imageRef is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("imageRef", req.ImageRef); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -134,13 +145,16 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddChartRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
 	if req.Name == "" {
 		http.Error(w, "name is required", http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("name", req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
 
@@ -234,8 +248,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req AddFileRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -244,9 +257,50 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "Either filePath or url is required", http.StatusBadRequest)
 		return
 	}
+	if err := rejectFlagLike("filePath", req.FilePath); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := rejectFlagLike("url", req.URL); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	if req.FilePath != "" && req.URL != "" {
 		http.Error(w, "Please provide either filePath or url, not both", http.StatusBadRequest)
 		return
+	}
+	var u *url.URL
+	if req.URL != "" {
+		var err error
+		if u, err = remoteFileURL(req.URL); err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+	}
+	// The name becomes the file's name when hauler serves or extracts it. A url
+	// download is stored under a temporary name, so it always needs one.
+	name := req.Name
+	if name == "" && u != nil {
+		name = path.Base(u.Path)
+		if !validFileName(name) {
+			http.Error(w, "name is required: the url path does not end in a file name", http.StatusBadRequest)
+			return
+		}
+	}
+	if name != "" && !validFileName(name) {
+		http.Error(w, "name must be a plain file name, without '/' or '\\', and not '.' or '..'", http.StatusBadRequest)
+		return
+	}
+
+	// A local path must be in the imports folder.
+	var fileSource string
+	if req.FilePath != "" {
+		resolved, err := h.importFile("filePath", req.FilePath)
+		if err != nil {
+			http.Error(w, err.Error(), http.StatusBadRequest)
+			return
+		}
+		fileSource = resolved
 	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
@@ -255,25 +309,48 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Determine the file source
-	fileSource := req.FilePath
-	if fileSource == "" {
-		fileSource = req.URL
+	// hauler never gets the url: its getters read some http(s) URLs as local
+	// paths. Wagon downloads it into the imports folder and passes that file.
+	var tmp string
+	if u != nil {
+		if tmp, err = h.fetchTempFile(); err != nil {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		fileSource = tmp
 	}
 
 	// Build args for hauler store add file command
 	args := []string{"store", "add", "file", fileSource}
 
 	// Optional name rewrite
-	if req.Name != "" {
-		args = append(args, "--name", req.Name)
+	if name != "" {
+		args = append(args, "--name", name)
 	}
 
 	// Scope to this haul's store.
 	args = append(args, storeArgs...)
 
 	// Create a job for the add file operation
-	job, err := h.JobRunner.CreateJob(r.Context(), "hauler", args, nil)
+	var job *jobrunner.Job
+	if u != nil {
+		job, err = h.JobRunner.CreatePreparedJob(r.Context(), "hauler", args,
+			func(ctx context.Context, logf func(string)) error {
+				logf("Downloading " + u.Redacted())
+				n, err := h.Fetcher.Download(ctx, u.String(), tmp)
+				if err != nil {
+					return fmt.Errorf("download failed: %w", err)
+				}
+				logf(fmt.Sprintf("Downloaded %d bytes", n))
+				return nil
+			},
+			func() { _ = os.Remove(tmp) })
+		if err != nil {
+			_ = os.Remove(tmp)
+		}
+	} else {
+		job, err = h.JobRunner.CreateJob(r.Context(), "hauler", args, nil)
+	}
 	if err != nil {
 		log.Printf("Error creating add file job: %v", err)
 		http.Error(w, "Failed to create add file job", http.StatusInternalServerError)
@@ -287,7 +364,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"jobId":   job.ID,
 		"message": "Add file job started",
-		"file":    fileSource,
+		"file":    cmp.Or(req.FilePath, req.URL),
 		"haulId":  haul.ID,
 	})
 }
