@@ -145,6 +145,7 @@ func main() {
 	// Initialize job runner
 	jobRunner := jobrunner.New(db.DB, cfg.DataDir)
 	jobHandler := jobrunner.NewHandler(jobRunner, cfg)
+	store.RemoveStaleManifests(context.Background(), jobRunner, cfg.HaulerTempDir)
 
 	// The background job processor is started later, once the publish manager
 	// exists, so it can also report published-haul metrics.

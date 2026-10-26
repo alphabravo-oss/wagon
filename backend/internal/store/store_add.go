@@ -308,7 +308,7 @@ func (h *Handler) AddFile(w http.ResponseWriter, r *http.Request) {
 	// A local path must be in the imports folder.
 	var fileSource string
 	if req.FilePath != "" {
-		resolved, err := h.importFile(req.FilePath)
+		resolved, err := h.importFile("filePath", req.FilePath)
 		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return

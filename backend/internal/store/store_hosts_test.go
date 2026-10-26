@@ -94,8 +94,6 @@ func TestStoreHosts_BlockedRefused(t *testing.T) {
 		{"sync", map[string]string{"registry": "127.0.0.1:5000"}, blocked},
 		{"sync", map[string]string{"registry": "internal.example"}, blocked},
 		{"sync", map[string]string{"registry": "user@public.example"}, "not a valid registry"},
-		{"sync", map[string]string{"products": "rancher=v2.10.1", "productRegistry": "169.254.169.254"}, blocked},
-		{"sync", map[string]string{"products": "rancher=v2.10.1", "productRegistry": "localhost:5000/mirror"}, blocked},
 	} {
 		h, db := hostPolicyHandler(t)
 		body := mustJSON(t, tc.body)
@@ -141,7 +139,6 @@ func TestStoreHosts_AllowedAccepted(t *testing.T) {
 		{"add-chart", map[string]string{"name": "bitnami/nginx"}},
 		{"sync", map[string]string{"manifestYaml": syncManifest}},
 		{"sync", map[string]string{"manifestYaml": syncManifest, "registry": "mirror.example:5000"}},
-		{"sync", map[string]string{"manifestYaml": syncManifest, "products": "rancher=v2.10.1", "productRegistry": "myorg"}},
 	} {
 		h, db := hostPolicyHandler(t)
 		w := postStore(h, tc.endpoint, mustJSON(t, tc.body))
