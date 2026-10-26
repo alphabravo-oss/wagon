@@ -226,7 +226,7 @@ func card69BadManifests(f *card69Fixture) []badManifest {
 		{"upper-case key", strings.Replace(filesManifest(f.outside), "path:", "PATH:", 1), notImports},
 		{"keys differing in case", filesManifest(f.inImports) + "      Path: " + f.outside + "\n", "differ only in case"},
 		{"name with folders", filesManifest(f.inImports) + "      name: ../../etc/cron.d/x\n", "files[0].name must be a plain file name"},
-		{"image key", images("", f.outside), "images[0].key " + notImports},
+		{"image key", images("", f.outside), "images[0].key must be a file in Wagon's imports folder (<data>/imports) or certs folder"},
 		{"image key in home", images("", "~/cosign.pub"), "images[0].key"},
 		{"key annotation", images("  annotations:\n    hauler.dev/key: "+f.outside+"\n", "\"\""), "annotation hauler.dev/key"},
 		{"local chart", charts("Charts", "chart", rel(f.dataDir, f.outsideDir)), "charts[0] names a local chart that " + notImports},

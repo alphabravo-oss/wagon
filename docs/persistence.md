@@ -100,14 +100,20 @@ with symlinks followed. Each one must be an existing file or folder below
 
 - `Files`: `spec.files[].path`. An `http://` or `https://` URL with a host is
   fetched by hauler, unless `filepath.Join(host, path)` exists on disk, which
-  hauler would open instead. `spec.files[].name` must be a plain file name.
+  hauler would open instead. Since the job may run later, that local form's
+  first element may not start with `.` (`.docker`, `..`), exist in `/data`,
+  or name a folder or file Wagon creates there (`certs`, `hauls`, `imports`,
+  `registry-tls`, `store`, `tmp`, the database and the configured store, temp
+  and login paths). `spec.files[].name` must be a plain file name.
 - `ImageTxts`: `spec.imageTxts[].ref`, the same way as a `Files` path.
 - `Charts` and `ThickCharts`: a chart that helm would load from disk (the chart
-  reference exists as a local path). Charts from `oci://` or `https://`
-  repositories are unchanged.
+  reference exists as a local path). `repoURL` must be an `http`, `https` or
+  `oci://` URL or a relative path; `file:` URLs and absolute paths are
+  refused.
 - `Images`: `spec.images[].key` and the `hauler.dev/key` annotation (cosign
-  public keys). A key must be a file in `/data/imports`; `~` paths and KMS
-  URIs are refused.
+  public keys). A key must be a regular file in `/data/imports` or
+  `/data/certs`; folders, `~` paths and KMS URIs are refused. `Files` paths
+  may not come from `/data/certs`, since that folder holds Serve's TLS key.
 
 Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents
 (`v1`, `v1alpha1`) of these five kinds are accepted, and a mapping may not
