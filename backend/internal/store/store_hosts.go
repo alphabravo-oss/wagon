@@ -38,10 +38,14 @@ func (h *Handler) checkRegistry(ctx context.Context, field, registry string) err
 // checkRepoURL checks the host of a chart repository URL such as
 // "https://charts.example.com" or "oci://registry.example.com/charts", or of a
 // chart name that is a URL. A value without a host, such as a repository or
-// chart name, is left to hauler.
+// chart name, is left to hauler. A host with a port but no name, such as
+// "http://:8080/x.tgz", is refused: Go dials an empty host as the local system.
 func (h *Handler) checkRepoURL(ctx context.Context, field, repoURL string) error {
 	u, err := url.Parse(repoURL)
 	if err != nil {
+		return fmt.Errorf("%s: not a valid URL", field)
+	}
+	if u.Host != "" && u.Hostname() == "" {
 		return fmt.Errorf("%s: not a valid URL", field)
 	}
 	if u.Hostname() == "" {

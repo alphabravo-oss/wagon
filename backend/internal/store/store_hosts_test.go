@@ -85,6 +85,12 @@ func TestStoreHosts_BlockedRefused(t *testing.T) {
 		{"add-chart", map[string]string{"name": "http://169.254.169.254/latest/meta-data/x.tgz"}, blocked},
 		{"add-chart", map[string]string{"name": "https://10.0.0.5/charts/x.tgz"}, blocked},
 		{"add-chart", map[string]string{"name": "oci://internal.example/charts/x"}, blocked},
+		// An empty host with a port: Go dials it as the local system.
+		{"add-chart", map[string]string{"name": "http://:8080/x.tgz"}, "name: not a valid URL"},
+		{"add-chart", map[string]string{"name": "oci://:5000/x"}, "name: not a valid URL"},
+		{"add-chart", map[string]string{"name": "oci://@:5000/x"}, "name: not a valid URL"},
+		{"add-chart", map[string]string{"name": "app", "repoUrl": "https://:443/charts"}, "repoUrl: not a valid URL"},
+		{"add-chart", map[string]string{"name": "app", "repoUrl": "oci://:5000/charts"}, "repoUrl: not a valid URL"},
 		{"sync", map[string]string{"registry": "127.0.0.1:5000"}, blocked},
 		{"sync", map[string]string{"registry": "internal.example"}, blocked},
 		{"sync", map[string]string{"registry": "user@public.example"}, "not a valid registry"},

@@ -133,7 +133,11 @@ resolve to against the same rules as Add File urls:
 - Add Chart: the host of `repoUrl`, such as `https://charts.example.com` or
   `oci://registry.example.com/charts`, and the host of `name` when the chart
   name is a URL, such as `oci://ghcr.io/org/charts/app`. A `repoUrl` or URL
-  `name` that is not a valid URL is refused.
+  `name` that is not a valid URL is refused, and so is one with a port but no
+  host name, such as `http://:8080/x.tgz`. A value with no host, such as
+  `grafana` or `bitnami/nginx`, is left to hauler. Wagon's parsing is close to
+  helm's but not proven identical: a value the two read differently could
+  still reach a host Wagon did not check.
 - Sync: `registry` and `productRegistry`.
 
 A blocked or unresolvable host gets HTTP 400 and no job. To use a registry or
