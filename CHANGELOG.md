@@ -71,6 +71,12 @@ All notable changes to Wagon will be documented in this file.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
+- Serve no longer accepts `configFile` on `POST /api/serve/registry`. hauler's
+  `--config` overrides every other flag, so a caller's config file could make a
+  read-only registry writable and point its storage at any path in the
+  container. A request that still sends `configFile` (any value) now gets HTTP
+  400 instead of starting hauler, and the Serve page no longer has a Config File
+  field. Wagon-generated config for Publishing is unchanged.
 
 ### Changed — secure defaults (breaking)
 
@@ -116,6 +122,25 @@ All notable changes to Wagon will be documented in this file.
 - Moved repository references to `github.com/alphabravo-oss/wagon` and release
   images to `ghcr.io/alphabravo-oss/wagon`.
 - Replaced the application logo, wordmark, and favicon with the Wagon branding.
+- Renamed the haul page's **Publish** tab to **Client Access** so it no longer
+  shares a name with the **Publishing** page.
+
+### Removed
+
+- Add Chart no longer has username/password fields, and
+  `POST /api/store/add-chart` ignores `username` and `password`. Hauler ignores
+  `--username`/`--password` on `store add chart`, and passing them exposed the
+  credentials in the process argv.
+
+### Fixed
+
+- Registry login now sends the username and password to hauler. It runs
+  `hauler login <registry> -u <user> --password-stdin`, and the password goes
+  only to stdin: it is not in the process arguments, the environment, the job
+  row or the job log. Before, Wagon set `HAULER_REGISTRY_USERNAME`/`PASSWORD`
+  env vars that hauler 1.3.2 does not read, and stored the password in the job
+  row. hauler saves credentials without checking them, so the UI and API now
+  say the login was saved, not verified; a wrong password fails at pull or push.
 
 ## [0.1.0] - 2026-07-11
 

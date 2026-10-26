@@ -38,7 +38,7 @@ A cluster that only pulls images needs port 5000, not 8080.
 ## 2. Publish a haul
 
 1. In the UI, add images to a haul (**Store Operations** page, with the haul active).
-2. Open the haul (**Hauls**, then the haul), go to its **Publish** tab, and click **Publish**.
+2. Open the haul (**Hauls**, then the haul), go to its **Client Access** tab, and click **Publish**.
 3. The **Publishing** page lists the haul with its registry host,
    for example `demo.registry.example.com:5000`, and its files URL `/h/demo/`.
 

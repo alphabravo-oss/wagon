@@ -1,9 +1,11 @@
 package serve
 
 import (
+	"bytes"
 	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"net/http"
 	"path/filepath"
 
@@ -14,20 +16,25 @@ import (
 // maxServeBody caps a serve request body. The requests are a few short fields.
 const maxServeBody = 64 << 10
 
-// decodeServeRequest reads a capped JSON body into v. It writes 413 for an
+// decodeServeRequest reads a capped JSON body into v and returns the bytes read,
+// so callers can also check which fields were sent. It writes 413 for an
 // oversized body and 400 for invalid JSON, and reports whether v is usable.
-func decodeServeRequest(w http.ResponseWriter, r *http.Request, v any) bool {
-	r.Body = http.MaxBytesReader(w, r.Body, maxServeBody)
-	if err := json.NewDecoder(r.Body).Decode(v); err != nil {
+func decodeServeRequest(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxServeBody))
+	if err != nil {
 		var tooBig *http.MaxBytesError
 		if errors.As(err, &tooBig) {
 			http.Error(w, fmt.Sprintf("Request body is larger than %d bytes", maxServeBody), http.StatusRequestEntityTooLarge)
-			return false
+			return nil, false
 		}
 		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
-		return false
+		return nil, false
 	}
-	return true
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(v); err != nil {
+		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+		return nil, false
+	}
+	return body, true
 }
 
 // servePaths checks the caller-supplied paths of a serve request before hauler,

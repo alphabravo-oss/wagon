@@ -6,6 +6,7 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
@@ -93,8 +94,15 @@ func TestLoginCreatesJob(t *testing.T) {
 	if job.Command != "hauler" {
 		t.Errorf("expected command %q, got %q", "hauler", job.Command)
 	}
-	if len(job.Args) != 2 || job.Args[0] != "login" || job.Args[1] != "registry.example.com" {
-		t.Errorf("unexpected args: %v", job.Args)
+	wantArgs := []string{"login", "registry.example.com", "-u", "alice", "--password-stdin"}
+	if strings.Join(job.Args, " ") != strings.Join(wantArgs, " ") {
+		t.Errorf("args %q, want %q", job.Args, wantArgs)
+	}
+	if len(job.EnvOverrides) != 0 {
+		t.Errorf("expected no env overrides, got keys %v", len(job.EnvOverrides))
+	}
+	if resp["message"] != loginSavedMessage || !strings.Contains(loginSavedMessage, "without checking") {
+		t.Errorf("message %q should say the login was saved, not verified", resp["message"])
 	}
 
 	jobs, err := runner.ListJobs(context.Background(), nil)
@@ -306,5 +314,87 @@ func TestLoginLogout_RejectLeadingDash(t *testing.T) {
 				t.Errorf("expected no jobs, got %d", len(jobs))
 			}
 		})
+	}
+}
+
+// Login hands hauler the password on stdin only: a fake hauler on PATH records
+// its argv, env and stdin, and the password must show up in stdin and nowhere
+// else, including the job row and job log.
+func TestLoginSendsPasswordOnStdinOnly(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"printf '%s\\n' \"$@\" > " + bin + "/argv\n" +
+		"env > " + bin + "/env\n" +
+		"cat > " + bin + "/stdin\n" +
+		"echo fake hauler login done\n"
+	if err := os.WriteFile(filepath.Join(bin, "hauler"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h, runner := newTestHandler(t, &config.Config{})
+	const password = "card61-not-a-real-password"
+	body := `{"registry":"registry.example.com","username":"alice","password":"` + password + `"}`
+	rec := httptest.NewRecorder()
+	h.Login(rec, httptest.NewRequest(http.MethodPost, "/api/registry/login", strings.NewReader(body)))
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		JobID int64 `json:"jobId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+	waitForJobSettled(t, runner, resp.JobID)
+	job, err := runner.GetJob(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != jobrunner.StatusSucceeded {
+		t.Fatalf("job %s", job.Status)
+	}
+
+	read := func(name string) string {
+		b, err := os.ReadFile(filepath.Join(bin, name))
+		if err != nil {
+			t.Fatal(err)
+		}
+		return string(b)
+	}
+	if got := read("stdin"); got != password {
+		t.Errorf("hauler stdin is not the password (%d bytes)", len(got))
+	}
+	if got, want := read("argv"), "login\nregistry.example.com\n-u\nalice\n--password-stdin\n"; got != want {
+		t.Errorf("argv %q, want %q", got, want)
+	}
+	if strings.Contains(read("argv"), password) || strings.Contains(read("env"), password) {
+		t.Error("password reached hauler's argv or env")
+	}
+	logs, err := runner.GetLogs(context.Background(), resp.JobID, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, l := range logs {
+		if strings.Contains(l.Content, password) {
+			t.Error("password in job log")
+		}
+	}
+	if raw, _ := json.Marshal(job); strings.Contains(string(raw), password) {
+		t.Error("password stored with the job")
+	}
+}
+
+// A registry that starts with '-' would be read by hauler as a flag.
+func TestLoginRejectsLeadingDashRegistry(t *testing.T) {
+	h, runner := newTestHandler(t, &config.Config{})
+	rec := httptest.NewRecorder()
+	body := `{"registry":"--password=x","username":"u","password":"p"}`
+	h.Login(rec, httptest.NewRequest(http.MethodPost, "/api/registry/login", strings.NewReader(body)))
+	if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "must not start with '-'") {
+		t.Errorf("status %d body %q, want 400 leading-dash error", rec.Code, rec.Body.String())
+	}
+	if jobs, _ := runner.ListJobs(context.Background(), nil); len(jobs) != 0 {
+		t.Errorf("expected no jobs, got %d", len(jobs))
 	}
 }

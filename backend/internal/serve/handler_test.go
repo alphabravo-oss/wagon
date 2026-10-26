@@ -653,3 +653,98 @@ func TestServeFileserver_BindFailureReturns500(t *testing.T) {
 		t.Fatalf("body = %q, want the bind error", rr.Body.String())
 	}
 }
+
+// recordingHauler is a fake hauler that writes each argument it gets on its own
+// line to the returned file, then exits 1 so launch returns once it has run.
+func recordingHauler(t *testing.T) string {
+	t.Helper()
+	argsFile := filepath.Join(t.TempDir(), "hauler-args")
+	t.Setenv("HAULER_ARGS_FILE", argsFile)
+	fakeHauler(t, `printf '%s\n' "$@" > "$HAULER_ARGS_FILE"; exit 1`)
+	return argsFile
+}
+
+// hauler's --config overrides every other flag, including --readonly, so a
+// request that still sends configFile must be refused before hauler runs, with
+// any value and any key casing encoding/json would have matched.
+func TestServeRegistry_ConfigFileRejected(t *testing.T) {
+	for _, body := range []string{
+		`{"configFile":"/tmp/writable.yaml"}`,
+		`{"readonly":true,"port":5093,"configFile":"/tmp/writable.yaml"}`,
+		`{"configFile":""}`,
+		`{"configFile":null}`,
+		`{"ConfigFile":"/tmp/writable.yaml"}`,
+	} {
+		t.Run(body, func(t *testing.T) {
+			argsFile := recordingHauler(t)
+			e := newTestEnv(t)
+
+			rr := httptest.NewRecorder()
+			e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(body)))
+			t.Cleanup(e.handler.StopAll)
+
+			if rr.Code != http.StatusBadRequest {
+				t.Fatalf("status = %d (%s), want 400", rr.Code, rr.Body.String())
+			}
+			if !strings.Contains(rr.Body.String(), "configFile is no longer supported") {
+				t.Errorf("body = %q, want it to say configFile is no longer supported", rr.Body.String())
+			}
+			if args, err := os.ReadFile(argsFile); err == nil {
+				t.Errorf("hauler ran with args %q, want it never started", args)
+			}
+			assertNoProcessesStarted(t, e)
+		})
+	}
+}
+
+// No request may put a config flag on the hauler command line: every accepted
+// option runs hauler without one, and a configFile request never runs it.
+func TestServeRegistry_ArgsNeverIncludeConfig(t *testing.T) {
+	for _, tc := range []struct {
+		body    string
+		wantRun bool
+	}{
+		{`{}`, true},
+		{`{"readonly":true}`, true},
+		{`{"readonly":false}`, true},
+		{`{"port":5094,"directory":"reg","tlsCert":"c.pem","tlsKey":"k.pem"}`, true},
+		{`{"autoTls":true,"readonly":true}`, true},
+		{`{"readonly":true,"configFile":"/tmp/writable.yaml"}`, false},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			argsFile := recordingHauler(t)
+			e := newTestEnv(t)
+			// Serve accepts tlsCert and tlsKey only as files in DataDir/certs.
+			certs := filepath.Join(e.cfg.DataDir, "certs")
+			if err := os.MkdirAll(certs, 0o755); err != nil {
+				t.Fatal(err)
+			}
+			for _, name := range []string{"c.pem", "k.pem"} {
+				if err := os.WriteFile(filepath.Join(certs, name), []byte("x"), 0o600); err != nil {
+					t.Fatal(err)
+				}
+			}
+
+			rr := httptest.NewRecorder()
+			e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(tc.body)))
+			t.Cleanup(e.handler.StopAll)
+
+			raw, err := os.ReadFile(argsFile)
+			if err != nil {
+				if tc.wantRun {
+					t.Fatalf("hauler did not run (status %d, %s): %v", rr.Code, rr.Body.String(), err)
+				}
+				return
+			}
+			args := strings.Split(strings.TrimSpace(string(raw)), "\n")
+			if len(args) < 3 || args[0] != "store" || args[1] != "serve" || args[2] != "registry" {
+				t.Fatalf("args = %q, want hauler store serve registry ...", args)
+			}
+			for _, a := range args {
+				if a == "-c" || a == "--config" || strings.HasPrefix(a, "--config=") || strings.HasPrefix(a, "-c=") {
+					t.Fatalf("args = %q, want no config flag", args)
+				}
+			}
+		})
+	}
+}

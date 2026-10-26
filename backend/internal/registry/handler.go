@@ -37,6 +37,11 @@ type LogoutRequest struct {
 	Registry string `json:"registry"`
 }
 
+// loginSavedMessage is the login response message. hauler login saves the
+// credentials without checking them with the registry, so a wrong password
+// only shows up when a pull or push fails.
+const loginSavedMessage = "Login job started. hauler saves the credentials without checking them with the registry; a wrong password shows up as a failed pull or push."
+
 // Login handles POST /api/registry/login
 func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -70,36 +75,22 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build args for hauler login command
-	args := []string{"login", req.Registry}
-
-	// Set environment variables for username and password
-	// This is more secure than passing as command line args
-	envOverrides := map[string]string{
-		"HAULER_REGISTRY_USERNAME": req.Username,
-		"HAULER_REGISTRY_PASSWORD": req.Password,
-	}
-
-	// Create a job for the login operation
-	job, err := h.jobRunner.CreateJob(r.Context(), "hauler", args, envOverrides)
+	// The password goes to hauler on stdin only, never in argv (visible in
+	// /proc/<pid>/cmdline), env or the job row. hauler 1.3.2 reads no
+	// username/password env vars.
+	args := []string{"login", req.Registry, "-u", req.Username, "--password-stdin"}
+	job, err := h.jobRunner.CreateStdinJob(r.Context(), "hauler", args, []byte(req.Password))
 	if err != nil {
 		log.Printf("Error creating login job: %v", err)
 		http.Error(w, "Failed to create login job", http.StatusInternalServerError)
 		return
 	}
 
-	// Start the job in background
-	go func() {
-		if err := h.jobRunner.Start(r.Context(), job.ID); err != nil {
-			log.Printf("Error starting login job %d: %v", job.ID, err)
-		}
-	}()
-
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"jobId":    job.ID,
-		"message":  "Login job started",
+		"message":  loginSavedMessage,
 		"registry": req.Registry,
 		"username": req.Username,
 	})
