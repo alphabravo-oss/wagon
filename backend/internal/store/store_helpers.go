@@ -1,9 +1,12 @@
 package store
 
 import (
+	"bytes"
 	"context"
+	"encoding/json"
 	"errors"
 	"fmt"
+	"io"
 	"log"
 	"net/http"
 	"net/url"
@@ -13,6 +16,7 @@ import (
 
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
 	"github.com/alphabravo-oss/wagon/backend/internal/httpjson"
+	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
 
@@ -26,6 +30,39 @@ func decodeStoreRequest(w http.ResponseWriter, r *http.Request, v any) bool {
 	return httpjson.Decode(w, r, v, maxStoreBody)
 }
 
+// readStoreRequest is decodeStoreRequest that also returns the raw body.
+func readStoreRequest(w http.ResponseWriter, r *http.Request, v any) ([]byte, bool) {
+	body, err := io.ReadAll(http.MaxBytesReader(w, r.Body, maxStoreBody))
+	if err == nil {
+		err = json.NewDecoder(bytes.NewReader(body)).Decode(v)
+	}
+	if err != nil {
+		var tooBig *http.MaxBytesError
+		if errors.As(err, &tooBig) {
+			http.Error(w, fmt.Sprintf("Request body is larger than %d bytes", maxStoreBody), http.StatusRequestEntityTooLarge)
+			return nil, false
+		}
+		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+		return nil, false
+	}
+	return body, true
+}
+
+// hasField reports whether the JSON object in body has the key name, matched
+// case-insensitively as encoding/json matches struct fields, whatever its value.
+func hasField(body []byte, name string) bool {
+	var fields map[string]json.RawMessage
+	if err := json.NewDecoder(bytes.NewReader(body)).Decode(&fields); err != nil {
+		return false
+	}
+	for key := range fields {
+		if strings.EqualFold(key, name) {
+			return true
+		}
+	}
+	return false
+}
+
 // rejectFlagLike prevents hauler's flag parser from reading a positional user value as a flag.
 func rejectFlagLike(field, value string) error {
 	if strings.HasPrefix(value, "-") {
@@ -34,19 +71,23 @@ func rejectFlagLike(field, value string) error {
 	return nil
 }
 
-// importFile confines an add-file filePath to an existing regular file in
+// importFile confines a local file the caller names in field (add-file
+// filePath, sync and load filenames) to an existing regular file in
 // <DataDir>/imports, the one folder Wagon reads local files from. hauler runs
 // as root, so any other path would be an arbitrary read. The error names no
 // host path.
-func (h *Handler) importFile(p string) (string, error) {
+func (h *Handler) importFile(field, p string) (string, error) {
 	dir := filepath.Join(h.Cfg.DataDir, "imports")
 	if err := os.MkdirAll(dir, 0755); err != nil {
 		log.Printf("Error creating imports directory: %v", err)
 		return "", errors.New("imports folder is unavailable")
 	}
 	resolved, err := safepath.ConfineFile(dir, p)
+	if err == nil && resolved == "" {
+		err = errors.New("empty")
+	}
 	if err != nil {
-		return "", fmt.Errorf("filePath must be a file in Wagon's imports folder (<data>/imports): %w", err)
+		return "", fmt.Errorf("%s must be a file in Wagon's imports folder (<data>/imports): %w", field, err)
 	}
 	return resolved, nil
 }
@@ -139,25 +180,53 @@ func (h *Handler) tagJobHaul(ctx context.Context, jobID, haulID int64) {
 	}
 }
 
-// writeTempManifest writes manifest YAML content to a temporary file and returns the path
+// syncManifestPattern names the checked manifest copies Sync hands hauler in
+// the temp folder. Boot cleanup removes any left by a stop mid-job.
+const syncManifestPattern = "sync-manifest-*.yaml"
+
+// RemoveStaleManifests deletes checked Sync manifest copies in tempDir that a
+// run which stopped before its jobs ended left behind. A copy a queued job
+// names is kept, since the dispatcher still runs that job; the next boot
+// removes it.
+func RemoveStaleManifests(ctx context.Context, runner *jobrunner.Runner, tempDir string) {
+	queued := jobrunner.StatusQueued
+	jobs, err := runner.ListJobs(ctx, &queued)
+	if err != nil {
+		log.Printf("Boot cleanup: cannot list queued jobs, keeping sync manifests: %v", err)
+		return
+	}
+	keep := map[string]bool{}
+	for _, job := range jobs {
+		for _, a := range job.Args {
+			keep[a] = true
+		}
+	}
+	matches, _ := filepath.Glob(filepath.Join(tempDir, syncManifestPattern))
+	for _, m := range matches {
+		if keep[m] {
+			continue
+		}
+		if err := os.Remove(m); err == nil {
+			log.Printf("Boot cleanup: removed stale sync manifest %s", filepath.Base(m))
+		}
+	}
+}
+
+// writeTempManifest writes manifest YAML content to a new, uniquely named
+// file in the temp folder and returns its path. The caller removes it.
 func (h *Handler) writeTempManifest(yamlContent string) (string, error) {
-	// Ensure temp directory exists
 	if err := os.MkdirAll(h.Cfg.HaulerTempDir, 0755); err != nil {
 		return "", fmt.Errorf("failed to create temp directory: %w", err)
 	}
-
-	// Create a temporary file with a predictable name for sync operations
-	tempFile := filepath.Join(h.Cfg.HaulerTempDir, fmt.Sprintf("sync-manifest-%d.yaml", makeTimestamp()))
-	if err := os.WriteFile(tempFile, []byte(yamlContent), 0644); err != nil {
+	f, err := os.CreateTemp(h.Cfg.HaulerTempDir, syncManifestPattern)
+	if err != nil {
+		return "", fmt.Errorf("failed to create temp manifest: %w", err)
+	}
+	if _, err := copyAndClose(f, strings.NewReader(yamlContent)); err != nil {
+		_ = os.Remove(f.Name())
 		return "", fmt.Errorf("failed to write temp manifest: %w", err)
 	}
-
-	return tempFile, nil
-}
-
-// makeTimestamp returns a unique timestamp-based identifier
-func makeTimestamp() int64 {
-	return int64(float64(1000000))
+	return f.Name(), nil
 }
 
 // clearStore removes a haul's store directory and recreates the OCI layout structure

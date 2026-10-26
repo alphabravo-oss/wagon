@@ -34,16 +34,11 @@ function StoreSync() {
   const [certificateOidcIssuerRegexp, setCertificateOidcIssuerRegexp] = useState('')
   const [certificateGithubWorkflow, setCertificateGithubWorkflow] = useState('')
   const [registry, setRegistry] = useState('')
-  const [products, setProducts] = useState('')
-  const [productRegistry, setProductRegistry] = useState('')
   const [rewrite, setRewrite] = useState('')
   const [useTlogVerify, setUseTlogVerify] = useState(false)
 
   // Show advanced options
   const [showAdvanced, setShowAdvanced] = useState(false)
-
-  // Product registry warning
-  const [showProductWarning, setShowProductWarning] = useState(false)
 
   const [submitting, setSubmitting] = useState(false)
 
@@ -55,11 +50,6 @@ function StoreSync() {
       setSelectedManifestId(manifestId)
     }
   }, [manifestId])
-
-  // Show warning when products/product-registry are used
-  useEffect(() => {
-    setShowProductWarning(products !== '' || productRegistry !== '')
-  }, [products, productRegistry])
 
   const fetchManifests = async () => {
     try {
@@ -109,8 +99,6 @@ function StoreSync() {
         certificateOidcIssuerRegexp: certificateOidcIssuerRegexp || undefined,
         certificateGithubWorkflow: certificateGithubWorkflow || undefined,
         registry: registry || undefined,
-        products: products || undefined,
-        productRegistry: productRegistry || undefined,
         rewrite: rewrite || undefined,
         useTlogVerify
       }
@@ -191,26 +179,6 @@ function StoreSync() {
         <div className="card" style={{ borderColor: 'var(--accent-red)', marginBottom: '1rem' }}>
           <div className="card-title" style={{ color: 'var(--accent-red)' }}>Error</div>
           <p style={{ color: 'var(--text-secondary)' }}>{error}</p>
-        </div>
-      )}
-
-      {showProductWarning && (
-        <div className="card" style={{ borderColor: 'var(--accent-amber)', marginBottom: '1rem' }}>
-          <div className="card-title" style={{ color: 'var(--accent-amber)', display: 'flex', alignItems: 'center', gap: '0.5rem' }}>
-            <AlertTriangle size={18} />
-            Product Registry Notice
-          </div>
-          <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
-            <p style={{ marginBottom: '0.5rem' }}>
-              <strong>Default Registry Change:</strong> The <code>--products</code> and <code>--product-registry</code>
-              flags now default to the RGS Carbide Registry (<code>rgcrprod.azurecr.us</code>) instead of
-              the previous registry.
-            </p>
-            <p style={{ marginBottom: 0 }}>
-              If you were using product-based pulls with the old default, you may need to explicitly
-              specify the <code>--product-registry</code> to maintain previous behavior.
-            </p>
-          </div>
         </div>
       )}
 
@@ -311,7 +279,7 @@ function StoreSync() {
                 <div className="form-group">
                   <label className="form-label">Manifest File Paths (-f/--filename)</label>
                   <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginBottom: '0.5rem' }}>
-                    Specify one or more manifest file paths. Defaults to <code>hauler-manifest.yaml</code>.
+                    Manifest files in the imports folder (<code>/data/imports</code>); a plain name is taken from there. Every local path inside a manifest must also be in that folder. Defaults to <code>hauler-manifest.yaml</code>.
                   </div>
                   {fileList.map((file, index) => (
                     <div key={index} style={{ display: 'flex', gap: '0.5rem', marginBottom: '0.5rem' }}>
@@ -389,36 +357,6 @@ function StoreSync() {
                 />
                 <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
                   Specify the registry for images that don&apos;t already define one
-                </div>
-              </div>
-
-              {/* Products */}
-              <div className="form-group">
-                <label className="form-label">Products (--products)</label>
-                <input
-                  className="form-input"
-                  placeholder="rancher=v2.10.1,rke2=v1.31.5+rke2r1"
-                  value={products}
-                  onChange={(e) => setProducts(e.target.value)}
-                  disabled={submitting}
-                />
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Fetch collections from product registry (comma-separated: name=version)
-                </div>
-              </div>
-
-              {/* Product Registry */}
-              <div className="form-group">
-                <label className="form-label">Product Registry (--product-registry)</label>
-                <input
-                  className="form-input"
-                  placeholder="rgcrprod.azurecr.us (default)"
-                  value={productRegistry}
-                  onChange={(e) => setProductRegistry(e.target.value)}
-                  disabled={submitting}
-                />
-                <div style={{ fontSize: '0.75rem', color: 'var(--text-muted)', marginTop: '0.35rem' }}>
-                  Specify the product registry. Defaults to RGS Carbide Registry.
                 </div>
               </div>
 
@@ -598,7 +536,7 @@ function StoreSync() {
                 <strong style={{ color: 'var(--accent-amber)' }}>File Paths:</strong>
               </p>
               <p style={{ fontSize: '0.75rem', color: 'var(--text-secondary)', marginTop: 0, marginBottom: '0.75rem' }}>
-                Reference files on the filesystem by path. Defaults to <code>hauler-manifest.yaml</code>.
+                Reference manifest files in <code>/data/imports</code>. Defaults to <code>hauler-manifest.yaml</code>.
               </p>
             </div>
           </div>
