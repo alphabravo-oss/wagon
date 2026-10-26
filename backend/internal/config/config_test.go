@@ -2,7 +2,9 @@ package config
 
 import (
 	"path/filepath"
+	"strings"
 	"testing"
+	"time"
 )
 
 // clearEnv sets all env vars consulted by Load to empty so that getEnv falls
@@ -21,6 +23,9 @@ func clearEnv(t *testing.T) {
 		"HAULER_UI_PUBLISH_PASSWORD",
 		"HAULER_UI_INSECURE_NO_AUTH",
 		"HAULER_UI_TRUSTED_ORIGINS",
+		"HAULER_UI_FETCH_ALLOW_CIDRS",
+		"HAULER_UI_FETCH_MAX_BYTES",
+		"HAULER_UI_FETCH_TIMEOUT",
 	} {
 		t.Setenv(key, "")
 	}
@@ -191,5 +196,38 @@ func TestTrustedOrigins(t *testing.T) {
 	got := Load().TrustedOrigins
 	if len(got) != 2 || got[0] != "https://a.example" || got[1] != "https://b.example:8443" {
 		t.Errorf("TrustedOrigins = %q", got)
+	}
+}
+
+func TestFetchSettings(t *testing.T) {
+	clearEnv(t)
+	t.Setenv("HAULER_UI_PASSWORD", "s3cret")
+	cfg := Load()
+	if cfg.FetchMaxBytes != 2<<30 || cfg.FetchTimeout != 30*time.Minute || len(cfg.FetchAllowCIDRs) != 0 {
+		t.Errorf("defaults: max %d timeout %s allow %q", cfg.FetchMaxBytes, cfg.FetchTimeout, cfg.FetchAllowCIDRs)
+	}
+
+	t.Setenv("HAULER_UI_FETCH_ALLOW_CIDRS", "10.0.0.0/8, fd00::/8")
+	t.Setenv("HAULER_UI_FETCH_MAX_BYTES", "1048576")
+	t.Setenv("HAULER_UI_FETCH_TIMEOUT", "90s")
+	cfg = Load()
+	if err := cfg.Validate(); err != nil {
+		t.Fatalf("Validate() = %v", err)
+	}
+	if cfg.FetchMaxBytes != 1<<20 || cfg.FetchTimeout != 90*time.Second || len(cfg.FetchAllowCIDRs) != 2 {
+		t.Errorf("set: max %d timeout %s allow %q", cfg.FetchMaxBytes, cfg.FetchTimeout, cfg.FetchAllowCIDRs)
+	}
+
+	for key, bad := range map[string]string{
+		"HAULER_UI_FETCH_ALLOW_CIDRS": "10.0.0.0",
+		"HAULER_UI_FETCH_MAX_BYTES":   "2GiB",
+		"HAULER_UI_FETCH_TIMEOUT":     "-1m",
+	} {
+		t.Run(key, func(t *testing.T) {
+			t.Setenv(key, bad)
+			if err := Load().Validate(); err == nil || !strings.Contains(err.Error(), key) {
+				t.Errorf("%s=%q: Validate() = %v, want an error naming %s", key, bad, err, key)
+			}
+		})
 	}
 }

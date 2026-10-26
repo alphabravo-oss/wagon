@@ -578,6 +578,62 @@ func TestJobExecutionWithLongLine(t *testing.T) {
 	}
 }
 
+func TestCreatePreparedJob(t *testing.T) {
+	db := setupTestDB(t)
+	runner := New(db, t.TempDir())
+	ctx := context.Background()
+	echoPath, err := exec.LookPath("echo")
+	if err != nil {
+		t.Skip("echo command not found")
+	}
+
+	for _, tc := range []struct {
+		name       string
+		prepareErr error
+		wantStatus JobStatus
+		wantLog    string
+	}{
+		{"prepare ok", nil, StatusSucceeded, "ran-command"},
+		{"prepare fails", errors.New("download failed: blocked"), StatusFailed, "download failed: blocked"},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			cleaned := make(chan struct{})
+			job, err := runner.CreatePreparedJob(ctx, echoPath, []string{"ran-command"},
+				func(_ context.Context, logf func(string)) error {
+					logf("preparing")
+					return tc.prepareErr
+				},
+				func() { close(cleaned) })
+			if err != nil {
+				t.Fatalf("CreatePreparedJob: %v", err)
+			}
+			if job.Status != StatusRunning {
+				t.Errorf("new job status %s, want running so the job processor skips it", job.Status)
+			}
+			select {
+			case <-cleaned:
+			case <-time.After(5 * time.Second):
+				t.Fatal("cleanup did not run")
+			}
+			got, err := runner.GetJob(ctx, job.ID)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if got.Status != tc.wantStatus {
+				t.Errorf("status %s, want %s", got.Status, tc.wantStatus)
+			}
+			logs, _ := runner.GetLogs(ctx, job.ID, nil)
+			var all []string
+			for _, l := range logs {
+				all = append(all, l.Content)
+			}
+			if joined := strings.Join(all, "\n"); !strings.Contains(joined, "preparing") || !strings.Contains(joined, tc.wantLog) {
+				t.Errorf("logs %q, want %q and %q", joined, "preparing", tc.wantLog)
+			}
+		})
+	}
+}
+
 // waitForEnd polls until the job has succeeded or failed.
 func waitForEnd(t *testing.T, runner *Runner, jobID int64) *Job {
 	t.Helper()

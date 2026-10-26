@@ -2,9 +2,14 @@ package config
 
 import (
 	"errors"
+	"fmt"
 	"os"
 	"path/filepath"
+	"strconv"
 	"strings"
+	"time"
+
+	"github.com/alphabravo-oss/wagon/backend/internal/safefetch"
 )
 
 // Config holds the application configuration
@@ -49,6 +54,21 @@ type Config struct {
 	// PublishAuthPassword is the optional HTTP Basic auth password for published
 	// registry/file endpoints (default: empty, no auth). Secret; not in ToMap.
 	PublishAuthPassword string
+
+	// FetchAllowCIDRs lists private ranges (RFC 1918, CGNAT, ULA) an Add File
+	// url may reach (HAULER_UI_FETCH_ALLOW_CIDRS, comma-separated). Loopback,
+	// link-local and metadata addresses stay blocked whatever it says.
+	FetchAllowCIDRs []string
+
+	// FetchMaxBytes caps an Add File url download (HAULER_UI_FETCH_MAX_BYTES,
+	// default 2 GiB; zero also means the default). Load sets -1 when the value
+	// does not parse, and Validate rejects it.
+	FetchMaxBytes int64
+
+	// FetchTimeout bounds an Add File url download, redirects included
+	// (HAULER_UI_FETCH_TIMEOUT, a Go duration such as 30m; default 30m, and
+	// zero also means the default). Load sets -1 when the value does not parse.
+	FetchTimeout time.Duration
 }
 
 // Load returns the application configuration from environment variables
@@ -71,7 +91,27 @@ func Load() *Config {
 
 		PublishAuthUser:     getEnv("HAULER_UI_PUBLISH_USER", ""),
 		PublishAuthPassword: getEnv("HAULER_UI_PUBLISH_PASSWORD", ""),
+
+		FetchAllowCIDRs: splitList(os.Getenv("HAULER_UI_FETCH_ALLOW_CIDRS")),
+		FetchMaxBytes:   parsePositiveInt(getEnv("HAULER_UI_FETCH_MAX_BYTES", strconv.FormatInt(safefetch.DefaultMaxBytes, 10))),
+		FetchTimeout:    parsePositiveDuration(getEnv("HAULER_UI_FETCH_TIMEOUT", safefetch.DefaultTimeout.String())),
 	}
+}
+
+func parsePositiveInt(v string) int64 {
+	n, err := strconv.ParseInt(strings.TrimSpace(v), 10, 64)
+	if err != nil || n <= 0 {
+		return -1
+	}
+	return n
+}
+
+func parsePositiveDuration(v string) time.Duration {
+	d, err := time.ParseDuration(strings.TrimSpace(v))
+	if err != nil || d <= 0 {
+		return -1
+	}
+	return d
 }
 
 // ErrNoPassword is returned by Validate when no UI password is configured and
@@ -85,6 +125,15 @@ var ErrNoPassword = errors.New("HAULER_UI_PASSWORD is not set: refusing to start
 func (c *Config) Validate() error {
 	if c.UIPassword == "" && !c.InsecureNoAuth {
 		return ErrNoPassword
+	}
+	if _, err := safefetch.ParseCIDRs(c.FetchAllowCIDRs); err != nil {
+		return fmt.Errorf("HAULER_UI_FETCH_ALLOW_CIDRS: %w", err)
+	}
+	if c.FetchMaxBytes < 0 {
+		return errors.New("HAULER_UI_FETCH_MAX_BYTES must be a positive number of bytes")
+	}
+	if c.FetchTimeout < 0 {
+		return errors.New("HAULER_UI_FETCH_TIMEOUT must be a positive Go duration, such as 30m")
 	}
 	return nil
 }

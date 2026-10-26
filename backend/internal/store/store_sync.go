@@ -34,8 +34,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SyncRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 

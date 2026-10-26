@@ -117,6 +117,9 @@ func TestServe_DirectoryOutsideHaulRejected(t *testing.T) {
 				if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), "directory must be a folder inside") {
 					t.Errorf("directory %q: status %d body %q, want 400 directory error", dir, rr.Code, rr.Body.String())
 				}
+				if strings.Contains(rr.Body.String(), e.cfg.DataDir) {
+					t.Errorf("directory %q: 400 body names the data folder: %q", dir, rr.Body.String())
+				}
 			}
 			if got := argv(); got != "" {
 				t.Fatalf("hauler ran with %q; it must not run for a rejected directory", got)
@@ -203,6 +206,9 @@ func TestServe_TLSPathsOutsideCertsRejected(t *testing.T) {
 					rr := post(e, ep, jsonBody(t, fields))
 					if rr.Code != http.StatusBadRequest || !strings.Contains(rr.Body.String(), field+" must be a file in") {
 						t.Errorf("%s %q: status %d body %q, want 400 %s error", field, p, rr.Code, rr.Body.String(), field)
+					}
+					if strings.Contains(rr.Body.String(), e.cfg.DataDir) {
+						t.Errorf("%s %q: 400 body names the data folder: %q", field, p, rr.Body.String())
 					}
 				}
 			}

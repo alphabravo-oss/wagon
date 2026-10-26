@@ -56,13 +56,70 @@ Within `/data`, the following structure is created:
 /data/
 ├── hauls/
 │   └── <slug>/
-│       └── store/  # each haul's content store
+│       ├── store/      # each haul's content store
+│       ├── archives/   # saved and imported .tar.zst archives
+│       └── extracted/  # default Extract output
+├── imports/        # local files for Add File (see below)
 ├── store/          # HAULER_STORE_DIR - legacy single store
 ├── tmp/            # HAULER_TEMP_DIR - Temporary files
 ├── .docker/
 │   └── config.json # Docker registry credentials
 └── app.db          # SQLite database (jobs, settings, manifests)
 ```
+
+## Folders hauler reads from and writes to
+
+hauler runs as root in the container, so Wagon only passes it paths inside
+these folders. Any other path gets HTTP 400 before hauler starts. Relative
+paths are taken from the folder, and symlinks are resolved before the check.
+
+| Operation | Field | Allowed folder |
+|-----------|-------|----------------|
+| Add File | `filePath` | an existing file in `/data/imports` |
+| Add File | `url` | an `http://` or `https://` URL with a host (no bare paths, no `file://`). Wagon downloads it to a temporary file in `/data/imports` and hauler adds that file; hauler never sees the URL |
+| Extract | `outputDir` | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders; default `/data/hauls/<slug>/extracted` |
+| Copy Store | `dir://` target | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders |
+| Serve | `directory` | a folder inside the haul's folder, outside its store |
+| Serve | `tlsCert`, `tlsKey` | an existing file in `/data/certs` |
+
+To add a local file, put it in `/data/imports` first (with the compose file,
+that is `deploy/data/imports/` on the host), then enter its name, such as
+`config.yaml`, under **Add File**. The Add File `name` must be a plain file
+name: no `/` or `\`, and not `.` or `..`.
+
+### Add File URL downloads
+
+Wagon downloads an Add File `url` itself, because hauler's file getter opened
+some `http://` URLs, such as `http://x/../../etc/passwd` or `http://app.db`,
+as local paths. The download goes to a temporary file named
+`.wagon-fetch-*` in `/data/imports`. hauler then runs
+`hauler store add file <that file> --name <name>`, and Wagon deletes the
+file when the job ends. Leftovers from a crash are deleted at the next start.
+
+- Only `http` and `https`, for the URL and for every redirect (at most 10).
+- Every connection is checked against the address it resolves to, including
+  each redirect hop. Wagon checks the address before dialing and again on the
+  socket itself, so a DNS answer cannot change in between.
+- Always refused: loopback (`127.0.0.0/8`, `::1`), `0.0.0.0/8` and `::`,
+  link-local (`169.254.0.0/16`, which includes the `169.254.169.254` cloud
+  metadata address, and `fe80::/10`), multicast and reserved addresses, and
+  the IPv4-mapped and NAT64 forms of these.
+- Refused unless listed in `HAULER_UI_FETCH_ALLOW_CIDRS`: private ranges
+  `10.0.0.0/8`, `172.16.0.0/12`, `192.168.0.0/16`, CGNAT `100.64.0.0/10`
+  (which includes Tailscale addresses) and IPv6 ULA `fc00::/7`. To fetch
+  from a mirror on your LAN, list its range, for example
+  `HAULER_UI_FETCH_ALLOW_CIDRS=10.20.0.0/16`.
+- Wagon connects directly and ignores `HTTP_PROXY` and `HTTPS_PROXY` for
+  these downloads, because a proxy would reach the target without the
+  address check. If you can only reach the internet through a proxy, put
+  the file in `/data/imports` and use **File Path** instead.
+- A download is capped at `HAULER_UI_FETCH_MAX_BYTES` (default 2 GiB) and
+  `HAULER_UI_FETCH_TIMEOUT` (default `30m`).
+- The default `name` is the last part of the URL path (`tool.tgz` for
+  `https://example.com/dist/tool.tgz`). When the path has none, for example
+  `https://example.com/`, set `name`.
+- A url job shows as running while it downloads. It does not wait for a free
+  slot under `HAULER_UI_MAX_CONCURRENT_JOBS`, but it counts towards it.
 
 ## Environment Variables
 
@@ -73,6 +130,9 @@ Within `/data`, the following structure is created:
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary storage for operations like sync and extract |
 | `DOCKER_CONFIG` | `/data/.docker` | Directory containing Docker registry authentication |
 | `HOME` | `/data` | Set to `/data` so that `hauler login` writes credentials to the persistent volume |
+| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Private ranges an Add File url may reach (see above) |
+| `HAULER_UI_FETCH_MAX_BYTES` | `2147483648` | Max size of one Add File url download |
+| `HAULER_UI_FETCH_TIMEOUT` | `30m` | Max time for one Add File url download |
 
 For the complete list of environment variables, see `deploy/.env.example`.
 

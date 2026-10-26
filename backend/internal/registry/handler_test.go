@@ -286,6 +286,37 @@ func TestInfoDisplayPathUnmappedWhenNotContainerPath(t *testing.T) {
 	}
 }
 
+// A registry that starts with '-' would be read by hauler as a flag, so login
+// and logout refuse it before creating a job.
+func TestLoginLogout_RejectLeadingDash(t *testing.T) {
+	for _, tc := range []struct {
+		name string
+		path string
+		body string
+		call func(h *Handler, w http.ResponseWriter, r *http.Request)
+	}{
+		{"login", "/api/registry/login", `{"registry":"--help","username":"u","password":"p"}`, (*Handler).Login},
+		{"logout", "/api/registry/logout", `{"registry":"-h"}`, (*Handler).Logout},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, runner := newTestHandler(t, &config.Config{})
+			rec := httptest.NewRecorder()
+			tc.call(h, rec, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+
+			if rec.Code != http.StatusBadRequest || !strings.Contains(rec.Body.String(), "must not start with '-'") {
+				t.Errorf("status %d body %q, want 400 leading-dash error", rec.Code, rec.Body.String())
+			}
+			jobs, err := runner.ListJobs(context.Background(), nil)
+			if err != nil {
+				t.Fatal(err)
+			}
+			if len(jobs) != 0 {
+				t.Errorf("expected no jobs, got %d", len(jobs))
+			}
+		})
+	}
+}
+
 // Login hands hauler the password on stdin only: a fake hauler on PATH records
 // its argv, env and stdin, and the password must show up in stdin and nowhere
 // else, including the job row and job log.

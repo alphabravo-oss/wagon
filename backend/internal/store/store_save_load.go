@@ -1,6 +1,7 @@
 package store
 
 import (
+	"cmp"
 	"context"
 	"encoding/json"
 	"fmt"
@@ -46,8 +47,7 @@ func (h *Handler) Save(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req SaveRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -154,8 +154,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req ExtractRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 
@@ -174,13 +173,17 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
-	// Build args for hauler store extract command
-	args := []string{"store", "extract", req.ArtifactRef}
-
-	// Optional output directory
-	if req.OutputDir != "" {
-		args = append(args, "--output", req.OutputDir)
+	// hauler writes as root, so the output folder stays inside the haul's
+	// folder. Without one, it used to write into hauler's working folder, the
+	// data folder itself.
+	outputDir, err := haulOutputDir(haul, "outputDir", cmp.Or(req.OutputDir, "extracted"))
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
 	}
+
+	// Build args for hauler store extract command
+	args := []string{"store", "extract", req.ArtifactRef, "--output", outputDir}
 
 	// Scope to this haul's store.
 	args = append(args, storeArgs...)
@@ -194,7 +197,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 	h.tagJobHaul(r.Context(), job.ID, haul.ID)
 
 	// Record the output directory on success.
-	go h.trackExtractResult(job.ID, req.OutputDir)
+	go h.trackExtractResult(job.ID, outputDir)
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -202,7 +205,7 @@ func (h *Handler) Extract(w http.ResponseWriter, r *http.Request) {
 		"jobId":       job.ID,
 		"message":     "Extract job started",
 		"artifactRef": req.ArtifactRef,
-		"outputDir":   req.OutputDir,
+		"outputDir":   outputDir,
 		"haulId":      haul.ID,
 	})
 }
@@ -220,11 +223,7 @@ func (h *Handler) trackExtractResult(jobID int64, outputDir string) {
 		}
 		switch job.Status {
 		case jobrunner.StatusSucceeded:
-			resultOutputDir := outputDir
-			if resultOutputDir == "" {
-				resultOutputDir = "."
-			}
-			resultJSON, _ := json.Marshal(map[string]interface{}{"outputDir": resultOutputDir})
+			resultJSON, _ := json.Marshal(map[string]interface{}{"outputDir": outputDir})
 			_ = h.JobRunner.UpdateResult(ctx, jobID, string(resultJSON))
 			return
 		case jobrunner.StatusFailed:
@@ -241,8 +240,7 @@ func (h *Handler) Load(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LoadRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, "Invalid request body: "+err.Error(), http.StatusBadRequest)
+	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
 

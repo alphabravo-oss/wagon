@@ -113,6 +113,11 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, "registry is required", http.StatusBadRequest)
 		return
 	}
+	if strings.HasPrefix(req.Registry, "-") {
+		// hauler would read it as a flag, not the registry positional.
+		http.Error(w, "registry must not start with '-'", http.StatusBadRequest)
+		return
+	}
 
 	// Build args for hauler logout command
 	args := []string{"logout", req.Registry}
