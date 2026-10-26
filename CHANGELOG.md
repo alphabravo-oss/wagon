@@ -46,6 +46,13 @@ All notable changes to Wagon will be documented in this file.
   (default `30m`), and only `http` and `https` are followed. Before, a
   signed-in user could make Wagon fetch the metadata service or other
   internal hosts and serve the response from the store.
+- Add Image, Add Chart and Sync check the hosts hauler will connect to against
+  the same address policy (SSRF): the registry in `imageRef`, the host of
+  `repoUrl`, and Sync `registry` and `productRegistry`. A host that is
+  blocked, or that does not resolve, gets HTTP 400 before a job is created.
+  Before, `{"imageRef":"169.254.169.254/latest/meta-data"}` or a `repoUrl` on
+  `127.0.0.1` made hauler, which runs as root, connect there. Images and
+  charts listed inside a Sync manifest are not checked yet.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
@@ -62,7 +69,10 @@ All notable changes to Wagon will be documented in this file.
   `http://` or `https://`. Wagon downloads the url itself, directly: it
   ignores `HTTP_PROXY`/`HTTPS_PROXY`, refuses private addresses unless
   `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and needs a `name` when the URL
-  path has no file name (HTTP 400). Extract and Copy write only inside the
+  path has no file name (HTTP 400). Add Image, Add Chart and Sync refuse
+  registries and chart repositories on private addresses unless
+  `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and hosts Wagon cannot resolve
+  (HTTP 400). Extract and Copy write only inside the
   haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
   Requests that used other paths now get HTTP 400 (see Security above).
 - `HAULER_UI_PASSWORD` is now required. Wagon refuses to start without it. The

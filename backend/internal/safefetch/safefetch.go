@@ -175,6 +175,35 @@ func (f *Fetcher) check(ip netip.Addr) error {
 	return nil
 }
 
+// CheckHost resolves host and checks every address it resolves to. It is for
+// hosts Wagon hands to hauler rather than connecting to itself; hauler
+// resolves the name again when the job runs, so a DNS answer can still change
+// in between.
+func (f *Fetcher) CheckHost(ctx context.Context, host string) error {
+	if ip, err := netip.ParseAddr(host); err == nil {
+		return f.check(ip)
+	}
+	ips, err := f.lookup(ctx, host)
+	if err != nil {
+		// The resolver's error names Wagon's DNS server; callers show this
+		// message to the user, so leave it out.
+		var dnsErr *net.DNSError
+		if errors.As(err, &dnsErr) && dnsErr.IsNotFound {
+			return fmt.Errorf("cannot resolve %s: no such host", host)
+		}
+		return fmt.Errorf("cannot resolve %s", host)
+	}
+	if len(ips) == 0 {
+		return fmt.Errorf("cannot resolve %s: no addresses", host)
+	}
+	for _, ip := range ips {
+		if err := f.check(ip); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
 // control is the net.Dialer Control hook. address is the resolved ip:port
 // of the socket about to connect.
 func (f *Fetcher) control(_, address string, _ syscall.RawConn) error {

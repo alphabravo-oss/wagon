@@ -37,6 +37,15 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	if !decodeStoreRequest(w, r, &req) {
 		return
 	}
+	if err := h.checkRegistry(r.Context(), "registry", req.Registry); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// hauler pulls each product manifest as the image <productRegistry>/hauler/...
+	if err := h.checkRegistry(r.Context(), "productRegistry", imageRegistry(req.ProductRegistry+"/hauler")); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
