@@ -99,8 +99,10 @@ with symlinks followed. Each one must be an existing file or folder below
 `/data/imports`:
 
 - `Files`: `spec.files[].path`. An `http://` or `https://` URL with a host is
-  fetched by hauler, unless `filepath.Join(host, path)` exists on disk, which
-  hauler would open instead. Since the job may run later, that local form's
+  fetched by hauler, and its host is checked (see
+  [Registries and chart repositories](#registries-and-chart-repositories)),
+  unless `filepath.Join(host, path)` exists on disk, which hauler would open
+  instead. Since the job may run later, that local form's
   first element may not start with `.` (`.docker`, `..`), exist in `/data`,
   or name a folder or file Wagon creates there (`certs`, `hauls`, `imports`,
   `registry-tls`, `store`, `tmp`, the database and the configured store, temp
@@ -180,7 +182,13 @@ resolve to against the same rules as Add File urls:
   `grafana` or `bitnami/nginx`, is left to hauler. Wagon's parsing is close to
   helm's but not proven identical: a value the two read differently could
   still reach a host Wagon did not check.
-- Sync: `registry`.
+- Sync: `registry`, and in every manifest: the registry of each
+  `spec.images[].name` and the `hauler.dev/registry` annotation; the host of
+  each Charts and ThickCharts `repoURL` and of a chart `name` that is a URL,
+  checked like Add Chart's; the registry of each ThickCharts
+  `extraImages[].ref`; and the host of an `http://` or `https://` `Files` path
+  or `ImageTxts` ref that hauler downloads (see [Sync manifests](#sync-manifests)).
+  A relative chart `repoURL` has no host and stays a local path.
 
 A blocked or unresolvable host gets HTTP 400 and no job. To use a registry or
 chart repository on your LAN, list its range in `HAULER_UI_FETCH_ALLOW_CIDRS`.
@@ -188,14 +196,14 @@ hauler still uses `HTTP_PROXY` and `HTTPS_PROXY`, but the check runs in Wagon
 with its own DNS: if Wagon cannot resolve a public registry name, the request
 is refused even when the proxy could reach it.
 hauler resolves the name again when the job runs, so this check does not stop
-a DNS answer that changes in between. Image and chart references inside a Sync
-manifest are not checked.
+a DNS answer that changes in between.
 
 Only the first host is checked: the one in the request. Hosts that hauler or
 helm reach after it are not: HTTP redirects (including a registry's blob
 redirects), the token realm a registry names in its auth challenge, absolute
 chart URLs in a repository's `index.yaml`, chart dependencies
-(`addDependencies`) and images listed inside a chart (`addImages`).
+(`addDependencies`), images listed inside a chart (`addImages`) and the images
+an `ImageTxts` file lists.
 
 ## Environment Variables
 

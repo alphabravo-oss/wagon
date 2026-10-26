@@ -54,13 +54,17 @@ All notable changes to Wagon will be documented in this file.
   The 400 names the host but not the addresses it resolves to, and the lookup
   gives up after 10 seconds. Before, `{"imageRef":"169.254.169.254/latest/meta-data"}`,
   a `repoUrl` on `127.0.0.1` or `{"name":"oci://127.0.0.1:5000/charts/x"}`
-  made hauler, which runs as root, connect there. Images and charts listed
-  inside a Sync manifest are not checked yet.
+  made hauler, which runs as root, connect there. The hosts named inside a
+  Sync manifest are checked the same way (card 114): each image `name`, the
+  `hauler.dev/registry` annotation, a chart's `repoURL`, a chart `name` that is
+  a URL, ThickCharts `extraImages` refs, and the host of an `http(s)` `Files`
+  path or `ImageTxts` ref that hauler downloads. Before, a manifest naming
+  `oci://127.0.0.1:5000/charts` or `127.0.0.1:5000/app:1` got HTTP 202.
   Only the first host is checked, not the hosts reached after it: redirects,
   registry auth realms, absolute chart URLs in a repository's `index.yaml`,
-  chart dependencies, and images inside a chart. hauler also resolves the
-  name again when the job runs, so a DNS answer that changes in between is
-  not stopped.
+  chart dependencies, images inside a chart, and the images an `ImageTxts`
+  file lists. hauler also resolves the name again when the job runs, so a DNS
+  answer that changes in between is not stopped.
 - Sync and Load no longer let a signed-in user put root-only host files into
   a store, where the unauthenticated serve port then served them (card 69).
   A Sync `Files` manifest naming `/etc/host_canary.txt` (mode `0600`) added it

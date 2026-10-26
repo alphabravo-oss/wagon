@@ -2,6 +2,7 @@ package store
 
 import (
 	"bytes"
+	"context"
 	"crypto/rand"
 	"encoding/json"
 	"errors"
@@ -29,8 +30,9 @@ var syncAPIVersions = map[string]bool{
 }
 
 // syncDoc holds the fields of a hauler manifest document that name something
-// hauler may read from disk. hauler decodes the same JSON with Go's
-// encoding/json, so field names match the same way here (case-insensitively).
+// hauler may read from disk or fetch from the network. hauler decodes the same
+// JSON with Go's encoding/json, so field names match the same way here
+// (case-insensitively).
 type syncDoc struct {
 	APIVersion string `json:"apiVersion"`
 	Kind       string `json:"kind"`
@@ -43,11 +45,15 @@ type syncDoc struct {
 			Name string `json:"name"`
 		} `json:"files"`
 		Images []struct {
-			Key string `json:"key"`
+			Name string `json:"name"`
+			Key  string `json:"key"`
 		} `json:"images"`
 		Charts []struct {
-			Name    string `json:"name"`
-			RepoURL string `json:"repoURL"`
+			Name        string `json:"name"`
+			RepoURL     string `json:"repoURL"`
+			ExtraImages []struct {
+				Ref string `json:"ref"`
+			} `json:"extraImages"`
 		} `json:"charts"`
 		ImageTxts []struct {
 			Ref string `json:"ref"`
@@ -61,7 +67,7 @@ type syncDoc struct {
 // path must be a file or folder in <DataDir>/imports. Wagon hands hauler the
 // re-encoded copy, so hauler reads exactly what was checked. The error names
 // no host path.
-func (h *Handler) checkSyncManifest(data []byte) ([]byte, error) {
+func (h *Handler) checkSyncManifest(ctx context.Context, data []byte) ([]byte, error) {
 	var out bytes.Buffer
 	mark := "\x00wagon-number-" + rand.Text() + "\x00"
 	dec := yaml.NewDecoder(bytes.NewReader(data))
@@ -89,7 +95,7 @@ func (h *Handler) checkSyncManifest(data []byte) ([]byte, error) {
 		if err != nil {
 			return nil, fmt.Errorf("manifest document %d cannot be read: %w", n, err)
 		}
-		if err := h.checkSyncDoc(doc); err != nil {
+		if err := h.checkSyncDoc(ctx, doc); err != nil {
 			return nil, fmt.Errorf("manifest document %d: %w", n, err)
 		}
 		out.WriteString("---\n")
@@ -179,7 +185,9 @@ func uniqueFoldedKeys(v any) error {
 
 // checkSyncDoc checks one JSON-encoded manifest document by kind, the way
 // hauler v1.3 reads it. Unknown kinds are refused, since hauler fails on them.
-func (h *Handler) checkSyncDoc(doc []byte) error {
+// Every registry, chart repository and URL hauler would contact is checked
+// against the same address policy as a direct request (store_hosts.go).
+func (h *Handler) checkSyncDoc(ctx context.Context, doc []byte) error {
 	var d syncDoc
 	if err := json.Unmarshal(doc, &d); err != nil {
 		return fmt.Errorf("cannot be read: %w", err)
@@ -190,8 +198,8 @@ func (h *Handler) checkSyncDoc(doc []byte) error {
 	switch d.Kind {
 	case "Files":
 		for i, f := range d.Spec.Files {
-			if err := h.manifestSource(f.Path); err != nil {
-				return fmt.Errorf("files[%d].path %w", i, err)
+			if err := h.manifestSource(ctx, fmt.Sprintf("files[%d].path", i), f.Path); err != nil {
+				return err
 			}
 			if f.Name != "" && !validFileName(f.Name) {
 				return fmt.Errorf("files[%d].name must be a plain file name", i)
@@ -201,9 +209,16 @@ func (h *Handler) checkSyncDoc(doc []byte) error {
 		if err := h.manifestKey(d.Metadata.Annotations["hauler.dev/key"]); err != nil {
 			return fmt.Errorf("annotation hauler.dev/key %w", err)
 		}
+		// hauler pulls an image without a registry from this one.
+		if err := h.checkRegistry(ctx, "annotation hauler.dev/registry", d.Metadata.Annotations["hauler.dev/registry"]); err != nil {
+			return err
+		}
 		for i, img := range d.Spec.Images {
 			if err := h.manifestKey(img.Key); err != nil {
 				return fmt.Errorf("images[%d].key %w", i, err)
+			}
+			if err := h.checkRegistry(ctx, fmt.Sprintf("images[%d].name", i), imageRegistry(img.Name)); err != nil {
+				return err
 			}
 		}
 	case "Charts", "ThickCharts":
@@ -211,11 +226,22 @@ func (h *Handler) checkSyncDoc(doc []byte) error {
 			if err := h.manifestChart(c.Name, c.RepoURL); err != nil {
 				return fmt.Errorf("charts[%d] %w", i, err)
 			}
+			if err := h.manifestChartURL(ctx, fmt.Sprintf("charts[%d].name", i), c.Name); err != nil {
+				return err
+			}
+			if err := h.manifestChartURL(ctx, fmt.Sprintf("charts[%d].repoURL", i), c.RepoURL); err != nil {
+				return err
+			}
+			for j, img := range c.ExtraImages {
+				if err := h.checkRegistry(ctx, fmt.Sprintf("charts[%d].extraImages[%d].ref", i, j), imageRegistry(img.Ref)); err != nil {
+					return err
+				}
+			}
 		}
 	case "ImageTxts":
 		for i, it := range d.Spec.ImageTxts {
-			if err := h.manifestSource(it.Ref); err != nil {
-				return fmt.Errorf("imageTxts[%d].ref %w", i, err)
+			if err := h.manifestSource(ctx, fmt.Sprintf("imageTxts[%d].ref", i), it.Ref); err != nil {
+				return err
 			}
 		}
 	default:
@@ -230,20 +256,24 @@ func (h *Handler) checkSyncDoc(doc []byte) error {
 // Only an http or https URL with a host whose local form does not exist is
 // fetched from the network instead, and only when that local form cannot name
 // something in or above the data folder: jobs queue, so it could appear
-// before hauler runs.
-func (h *Handler) manifestSource(src string) error {
+// before hauler runs. The host of a fetched URL is checked like a direct
+// request's.
+func (h *Handler) manifestSource(ctx context.Context, field, src string) error {
 	u, err := url.Parse(src)
 	if err != nil {
-		return errors.New("is not a valid path or URL")
+		return fmt.Errorf("%s is not a valid path or URL", field)
 	}
 	local := filepath.Join(u.Host, u.Path)
 	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && !h.mayExist(local) {
 		if h.dataFolderEntry(local) {
-			return errors.New("is a URL hauler would read from disk if its host and path named a file by the time the job runs; use a real host name")
+			return fmt.Errorf("%s is a URL hauler would read from disk if its host and path named a file by the time the job runs; use a real host name", field)
 		}
-		return nil
+		return h.checkRepoURL(ctx, field, src)
 	}
-	return h.manifestLocal(local)
+	if err := h.manifestLocal(local); err != nil {
+		return fmt.Errorf("%s %w", field, err)
+	}
+	return nil
 }
 
 // dataFolderNames are entries Wagon makes in the data folder, some only later
@@ -312,6 +342,16 @@ func (h *Handler) manifestChart(name, repoURL string) error {
 		return fmt.Errorf("names a local chart that %w", err)
 	}
 	return nil
+}
+
+// manifestChartURL checks the host of a chart name or repoURL that is a URL
+// (helm pulls a name that is a URL directly). A relative path has no host;
+// manifestChart confines it to imports.
+func (h *Handler) manifestChartURL(ctx context.Context, field, v string) error {
+	if !strings.Contains(v, "://") {
+		return nil
+	}
+	return h.checkRepoURL(ctx, field, v)
 }
 
 // manifestKey checks a cosign public key path. It must be an existing regular

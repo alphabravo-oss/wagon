@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -64,7 +65,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	// hauler reads each manifest, and every path in it, as root. Wagon checks
 	// them and hands hauler one checked copy, removed once the job ends.
-	manifest, filenames, err := h.syncManifest(req)
+	manifest, filenames, err := h.syncManifest(r.Context(), req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -150,9 +151,9 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 // manifestYaml or else from filenames (default hauler-manifest.yaml), which
 // must be files in <DataDir>/imports. It also returns the filenames to report.
 // The error names no host path.
-func (h *Handler) syncManifest(req SyncRequest) ([]byte, []string, error) {
+func (h *Handler) syncManifest(ctx context.Context, req SyncRequest) ([]byte, []string, error) {
 	if req.ManifestYaml != "" {
-		manifest, err := h.checkSyncManifest([]byte(req.ManifestYaml))
+		manifest, err := h.checkSyncManifest(ctx, []byte(req.ManifestYaml))
 		return manifest, []string{}, err
 	}
 	filenames := req.Filenames
@@ -170,7 +171,7 @@ func (h *Handler) syncManifest(req SyncRequest) ([]byte, []string, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", field, err)
 		}
-		checked, err := h.checkSyncManifest(data)
+		checked, err := h.checkSyncManifest(ctx, data)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", field, err)
 		}
