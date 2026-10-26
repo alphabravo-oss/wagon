@@ -11,6 +11,7 @@ import (
 	"net/url"
 	"os"
 	"path/filepath"
+	"slices"
 	"strings"
 
 	"gopkg.in/yaml.v3"
@@ -227,7 +228,9 @@ func (h *Handler) checkSyncDoc(doc []byte) error {
 // ImageTxts ref). They read filepath.Join(host, path) of the parsed URL from
 // disk whenever it exists, whatever the scheme, so that must lie in imports.
 // Only an http or https URL with a host whose local form does not exist is
-// fetched from the network instead.
+// fetched from the network instead, and only when that local form cannot name
+// something in or above the data folder: jobs queue, so it could appear
+// before hauler runs.
 func (h *Handler) manifestSource(src string) error {
 	u, err := url.Parse(src)
 	if err != nil {
@@ -235,19 +238,71 @@ func (h *Handler) manifestSource(src string) error {
 	}
 	local := filepath.Join(u.Host, u.Path)
 	if (u.Scheme == "http" || u.Scheme == "https") && u.Host != "" && !h.mayExist(local) {
+		if h.dataFolderEntry(local) {
+			return errors.New("is a URL hauler would read from disk if its host and path named a file by the time the job runs; use a real host name")
+		}
 		return nil
 	}
 	return h.manifestLocal(local)
 }
 
+// dataFolderNames are entries Wagon makes in the data folder, some only later
+// (certs on the first TLS serve). The configured store, temp, database and
+// registry login paths are added when they lie in the data folder.
+var dataFolderNames = []string{"app.db", "certs", "hauls", "imports", "registry-tls", "store", "tmp"}
+
+// dataFolderEntry reports whether the first element of the relative path p
+// could name something in the data folder when hauler runs: it starts with "."
+// (.docker, or .. out of the folder), names an entry that exists now, or names
+// one Wagon makes later. Names match case-insensitively.
+func (h *Handler) dataFolderEntry(p string) bool {
+	first, _, _ := strings.Cut(p, string(filepath.Separator))
+	if strings.HasPrefix(first, ".") {
+		return true
+	}
+	names := slices.Clone(dataFolderNames)
+	dataDir := filepath.Clean(h.Cfg.DataDir)
+	for _, c := range []string{h.Cfg.HaulerStoreDir, h.Cfg.HaulerTempDir, h.Cfg.DatabasePath, h.Cfg.DockerAuthPath} {
+		if c = filepath.Clean(c); filepath.IsAbs(c) && c != dataDir && safepath.Within(dataDir, c) {
+			rel, _ := filepath.Rel(dataDir, c)
+			top, _, _ := strings.Cut(rel, string(filepath.Separator))
+			names = append(names, top)
+		}
+	}
+	for _, db := range []string{"app.db", filepath.Base(h.Cfg.DatabasePath)} {
+		names = append(names, db+"-wal", db+"-shm", db+"-journal")
+	}
+	entries, err := os.ReadDir(dataDir)
+	if err != nil && !errors.Is(err, fs.ErrNotExist) {
+		return true
+	}
+	for _, e := range entries {
+		names = append(names, e.Name())
+	}
+	for _, n := range names {
+		if strings.EqualFold(first, n) {
+			return true
+		}
+	}
+	return false
+}
+
 // manifestChart checks a chart the way hauler builds the chart reference and
-// helm locates it: helm loads the reference from disk whenever it exists.
+// helm locates it: helm loads the reference from disk whenever it exists. A
+// repoURL must be an http, https or oci:// URL or a relative path; a file URL
+// or an absolute path would point helm at the host's disk.
 func (h *Handler) manifestChart(name, repoURL string) error {
+	errRepo := errors.New("repoURL must be an http, https or oci:// URL")
+	if repo := strings.TrimSpace(repoURL); filepath.IsAbs(repo) || strings.HasPrefix(strings.ToLower(repo), "file:") {
+		return errRepo
+	}
 	ref := name
 	if strings.HasPrefix(repoURL, "oci://") {
 		ref = repoURL + "/" + name
-	} else if _, err := url.ParseRequestURI(repoURL); err != nil {
+	} else if u, err := url.ParseRequestURI(repoURL); err != nil {
 		ref = repoURL + "/" + name
+	} else if u.Scheme != "http" && u.Scheme != "https" && u.Scheme != "oci" {
+		return errRepo
 	}
 	ref = strings.TrimSpace(ref)
 	if !h.mayExist(ref) {

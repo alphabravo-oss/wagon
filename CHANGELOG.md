@@ -74,6 +74,17 @@ All notable changes to Wagon will be documented in this file.
   card 68 lands, so one key file can serve both. A folder or a missing file gets HTTP 400 before a job
   exists; before, a folder in imports passed the check. `Files` paths and every
   other local path in a manifest still have to be in `<data>/imports`.
+- A Sync manifest's `http://` or `https://` `Files` path or `ImageTxts` ref
+  gets HTTP 400 when `filepath.Join(host, path)` could name something in or
+  above the data folder by the time the queued job runs: a first element that
+  starts with `.` (`.docker`, `..`), that exists in `<data>`, or that Wagon
+  creates there (`certs`, `hauls`, `imports`, `registry-tls`, `store`, `tmp`,
+  the database and the configured store, temp and login paths). hauler reads
+  that local form whenever it exists, so `https://certs/registry.key` passed
+  the check while Serve's TLS key did not exist yet and read it once it did
+  (card 111, review 101). A Charts or ThickCharts `repoURL` must be an
+  `http`, `https` or `oci://` URL or a relative path; `file:` URLs in any case
+  and absolute paths get HTTP 400.
 - Registry login and logout reject a `registry` that starts with `-` (HTTP 400).
   JSON store request bodies are capped at 1 MiB (HTTP 413). Serve and store 400
   messages no longer include absolute data-folder paths.
