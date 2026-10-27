@@ -207,7 +207,7 @@ redirects included. See `docs/persistence.md`.
 
 | Variable | Default | Description |
 |----------|---------|-------------|
-| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Comma-separated private ranges an Add File url may reach, such as `10.20.0.0/16`. Without it, RFC 1918, CGNAT `100.64.0.0/10` and IPv6 `fc00::/7` are refused. Loopback, link-local (including `169.254.169.254`), multicast and reserved addresses are always refused |
+| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Comma-separated private ranges an Add File url, Add Image or Sync registry, Add Chart `repoUrl` or URL chart `name` (such as `oci://…`) may be on, such as `10.20.0.0/16`. Without it, RFC 1918, CGNAT `100.64.0.0/10` and IPv6 `fc00::/7` are refused. Loopback, link-local (including `169.254.169.254`), multicast and reserved addresses are always refused |
 | `HAULER_UI_FETCH_MAX_BYTES` | `2147483648` (2 GiB) | Max size of one Add File url download |
 | `HAULER_UI_FETCH_TIMEOUT` | `30m` | Max time for one Add File url download, redirects included (Go duration) |
 

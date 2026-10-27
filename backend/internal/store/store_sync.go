@@ -1,6 +1,7 @@
 package store
 
 import (
+	"context"
 	"encoding/json"
 	"errors"
 	"fmt"
@@ -8,6 +9,7 @@ import (
 	"log"
 	"net/http"
 	"os"
+	"time"
 )
 
 // SyncRequest represents the request to sync the store from manifests
@@ -32,6 +34,10 @@ type SyncRequest struct {
 // and runs it unchecked, so it could name any host file.
 const errProductsRemoved = "products and productRegistry are not supported: hauler would run the product's manifest from that registry without Wagon checking it; put the manifest in Wagon's imports folder (<data>/imports) and sync it with filenames"
 
+// syncHostsTimeout bounds all the host lookups one Sync request makes, for
+// its registry and every host its manifests name.
+const syncHostsTimeout = 30 * time.Second
+
 // Sync handles POST /api/store/sync
 func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	if r.Method != http.MethodPost {
@@ -48,6 +54,12 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errProductsRemoved, http.StatusBadRequest)
 		return
 	}
+	hostsCtx, cancel := context.WithTimeout(withHostChecks(r.Context()), syncHostsTimeout)
+	defer cancel()
+	if err := h.checkRegistry(hostsCtx, "registry", req.Registry); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
@@ -60,7 +72,7 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 
 	// hauler reads each manifest, and every path in it, as root. Wagon checks
 	// them and hands hauler one checked copy, removed once the job ends.
-	manifest, filenames, err := h.syncManifest(req)
+	manifest, filenames, err := h.syncManifest(hostsCtx, req)
 	if err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
@@ -146,9 +158,9 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 // manifestYaml or else from filenames (default hauler-manifest.yaml), which
 // must be files in <DataDir>/imports. It also returns the filenames to report.
 // The error names no host path.
-func (h *Handler) syncManifest(req SyncRequest) ([]byte, []string, error) {
+func (h *Handler) syncManifest(ctx context.Context, req SyncRequest) ([]byte, []string, error) {
 	if req.ManifestYaml != "" {
-		manifest, err := h.checkSyncManifest([]byte(req.ManifestYaml))
+		manifest, err := h.checkSyncManifest(ctx, []byte(req.ManifestYaml))
 		return manifest, []string{}, err
 	}
 	filenames := req.Filenames
@@ -166,7 +178,7 @@ func (h *Handler) syncManifest(req SyncRequest) ([]byte, []string, error) {
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", field, err)
 		}
-		checked, err := h.checkSyncManifest(data)
+		checked, err := h.checkSyncManifest(ctx, data)
 		if err != nil {
 			return nil, nil, fmt.Errorf("%s: %w", field, err)
 		}
