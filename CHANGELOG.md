@@ -54,6 +54,30 @@ All notable changes to Wagon will be documented in this file.
   (default `30m`), and only `http` and `https` are followed. Before, a
   signed-in user could make Wagon fetch the metadata service or other
   internal hosts and serve the response from the store.
+- Add Image, Add Chart and Sync check the hosts hauler will connect to against
+  the same address policy (SSRF): the registry in `imageRef`, the host of
+  `repoUrl`, the host of a chart `name` that is a URL (`oci://…`,
+  `https://…/x.tgz`), and the Sync `registry`. A host that
+  is blocked, or that does not resolve, gets HTTP 400 before a job is created.
+  The 400 names the host but not the addresses it resolves to, and the lookup
+  gives up after 10 seconds. Before, `{"imageRef":"169.254.169.254/latest/meta-data"}`,
+  a `repoUrl` on `127.0.0.1` or `{"name":"oci://127.0.0.1:5000/charts/x"}`
+  made hauler, which runs as root, connect there. The hosts named inside a
+  Sync manifest are checked the same way (card 114): each image `name`, the
+  `hauler.dev/registry` annotation, a chart's `repoURL`, a chart `name` that is
+  a URL, the `repoURL/name` reference hauler joins when that is a URL,
+  ThickCharts `extraImages` refs, and the host of every `http(s)` `Files` path
+  or `ImageTxts` ref, even one whose host and path also name a file in
+  imports. A chart `repoURL` or `name` that starts or ends with a space or
+  holds a control character is refused. Each host is looked up once per
+  request, within one 30-second limit for the whole Sync. Before, a manifest
+  naming `oci://127.0.0.1:5000/charts`, `127.0.0.1:5000/app:1`, or
+  `repoURL: " oci:"` with `name: /127.0.0.1:5000/charts/x` got HTTP 202.
+  Only the first host is checked, not the hosts reached after it: redirects,
+  registry auth realms, absolute chart URLs in a repository's `index.yaml`,
+  the images a ThickCharts chart renders, and the images an `ImageTxts` file
+  lists. hauler also resolves the name again when the job runs, so a DNS
+  answer that changes in between is not stopped.
 - Sync and Load no longer let a signed-in user put root-only host files into
   a store, where the unauthenticated serve port then served them (card 69).
   A Sync `Files` manifest naming `/etc/host_canary.txt` (mode `0600`) added it
@@ -111,7 +135,10 @@ All notable changes to Wagon will be documented in this file.
   `http://` or `https://`. Wagon downloads the url itself, directly: it
   ignores `HTTP_PROXY`/`HTTPS_PROXY`, refuses private addresses unless
   `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and needs a `name` when the URL
-  path has no file name (HTTP 400). Extract and Copy write only inside the
+  path has no file name (HTTP 400). Add Image, Add Chart and Sync refuse
+  registries and chart repositories on private addresses unless
+  `HAULER_UI_FETCH_ALLOW_CIDRS` lists them, and hosts Wagon cannot resolve
+  (HTTP 400). Extract and Copy write only inside the
   haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
   Requests that used other paths now get HTTP 400 (see Security above).
 - Signing keys and chart TLS files go in `<data>/certs`: Add Image and Sync
@@ -176,6 +203,17 @@ All notable changes to Wagon will be documented in this file.
   env vars that hauler 1.3.2 does not read, and stored the password in the job
   row. hauler saves credentials without checking them, so the UI and API now
   say the login was saved, not verified; a wrong password fails at pull or push.
+- Starting a registry serve on an empty haul no longer fails with HTTP 500
+  (`stat …/index.json: no such file or directory`); it starts with an empty
+  catalog. New hauls get an empty `index.json`, and existing empty hauls get one
+  when a registry serve starts.
+- Pulling from a published empty haul made by an older Wagon no longer fails
+  with HTTP 502 "registry unavailable". Its store had no `index.json`, so the
+  haul's registry exited at once; Wagon now adds an empty `index.json` before
+  it starts the registry, and `/v2/_catalog` returns an empty list.
+- `POST /api/serve/registry` without a `readonly` field now starts a read-only
+  registry. Pushes need `"readonly": false` explicitly (the Serve page always
+  sends the field, so it is unaffected).
 
 ## [0.1.0] - 2026-07-11
 
