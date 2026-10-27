@@ -79,11 +79,13 @@ paths are taken from the folder, and symlinks are resolved before the check.
 | Add File | `url` | an `http://` or `https://` URL with a host (no bare paths, no `file://`). Wagon downloads it to a temporary file in `/data/imports` and hauler adds that file; hauler never sees the URL |
 | Load | `filenames` | a plain file name is an archive in the haul's `archives` folder; any other path must be an existing file in `/data/imports` |
 | Sync | `filenames` | existing files in `/data/imports`; default `/data/imports/hauler-manifest.yaml` |
-| Sync | local paths inside a manifest | an existing file or folder below `/data/imports` (see [Sync manifests](#sync-manifests)) |
+| Sync | local paths inside a manifest | an existing file or folder below `/data/imports`; a cosign key may instead be a regular file in `/data/certs`. Unlike every other row, a relative path is taken from `/data` (see [Sync manifests](#sync-manifests)) |
 | Extract | `outputDir` | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders; default `/data/hauls/<slug>/extracted` |
 | Copy Store | `dir://` target | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders |
 | Serve | `directory` | a folder inside the haul's folder, outside its store |
 | Serve | `tlsCert`, `tlsKey` | an existing file in `/data/certs` |
+| Sync, Add Image | `key` | an existing regular file in `/data/certs`. A relative path is taken from `/data/certs` (`registry.pub` is `/data/certs/registry.pub`). A key inside a Sync manifest follows different rules (see [Sync manifests](#sync-manifests)) |
+| Add Chart | `keyFile`, `certFile`, `caFile` | an existing regular file in `/data/certs` |
 
 To add a local file, put it in `/data/imports` first (with the compose file,
 that is `deploy/data/imports/` on the host), then enter its name, such as
@@ -98,21 +100,31 @@ each local path the way hauler resolves it: relative to `/data`, URL-decoded,
 with symlinks followed. Each one must be an existing file or folder below
 `/data/imports`:
 
-- `Files`: `spec.files[].path`. An `http://` or `https://` URL with a host is
-  fetched by hauler, unless `filepath.Join(host, path)` exists on disk, which
-  hauler would open instead. Since the job may run later, that local form's
-  first element may not start with `.` (`.docker`, `..`), exist in `/data`,
-  or name a folder or file Wagon creates there (`certs`, `hauls`, `imports`,
-  `registry-tls`, `store`, `tmp`, the database and the configured store, temp
-  and login paths). `spec.files[].name` must be a plain file name.
+- `Files`: `spec.files[].path`. hauler may fetch an `http://` or `https://`
+  URL with a host, so its host is always checked (see
+  [Registries and chart repositories](#registries-and-chart-repositories)).
+  hauler may also read `filepath.Join(host, path)` from disk: when that exists,
+  hauler picks its file or http getter in random order. So an existing local
+  form must also lie below `/data/imports`. When it does not exist, the job
+  may run later, so its first element may not start with `.` (`.docker`,
+  `..`), exist in `/data`, or name a folder or file Wagon creates there
+  (`certs`, `hauls`, `imports`, `registry-tls`, `store`, `tmp`, the database
+  and the configured store, temp and login paths). `spec.files[].name` must be
+  a plain file name.
 - `ImageTxts`: `spec.imageTxts[].ref`, the same way as a `Files` path.
 - `Charts` and `ThickCharts`: a chart that helm would load from disk (the chart
   reference exists as a local path). `repoURL` must be an `http`, `https` or
   `oci://` URL or a relative path; `file:` URLs and absolute paths are
-  refused.
+  refused. `repoURL` and `name` may not start or end with a space (including
+  a tab or U+00A0) or contain a control character: hauler joins them as
+  `repoURL/name` and helm trims the result, so `" oci:"` and
+  `"/127.0.0.1/x"` would name `oci://127.0.0.1/x`.
 - `Images`: `spec.images[].key` and the `hauler.dev/key` annotation (cosign
   public keys). A key must be a regular file in `/data/imports` or
-  `/data/certs`; folders, `~` paths and KMS URIs are refused. `Files` paths
+  `/data/certs`; folders, `~` paths and KMS URIs are refused. Like every
+  path in a manifest, a relative key is taken from `/data`, so a key in
+  `/data/certs` is `certs/registry.pub` here, but `registry.pub` in the
+  request's `key` field. An absolute path works in both. `Files` paths
   may not come from `/data/certs`, since that folder holds Serve's TLS key.
 
 Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents
@@ -163,6 +175,48 @@ file when the job ends. Leftovers from a crash are deleted at the next start.
 - A url job shows as running while it downloads. It does not wait for a free
   slot under `HAULER_UI_MAX_CONCURRENT_JOBS`, but it counts towards it.
 
+### Registries and chart repositories
+
+hauler, not Wagon, connects to image registries and chart repositories. Before
+it creates the job, Wagon resolves these hosts and checks every address they
+resolve to against the same rules as Add File urls:
+
+- Add Image: the registry in `imageRef`, such as `registry.example.com:5000`
+  in `registry.example.com:5000/app:1`. A reference without a registry, such
+  as `nginx:1.27`, goes to Docker Hub and is not checked.
+- Add Chart: the host of `repoUrl`, such as `https://charts.example.com` or
+  `oci://registry.example.com/charts`, and the host of `name` when the chart
+  name is a URL, such as `oci://ghcr.io/org/charts/app`. A `repoUrl` or URL
+  `name` that is not a valid URL is refused, and so is one with a port but no
+  host name, such as `http://:8080/x.tgz`. A value with no host, such as
+  `grafana` or `bitnami/nginx`, is left to hauler. Wagon's parsing is close to
+  helm's but not proven identical: a value the two read differently could
+  still reach a host Wagon did not check.
+- Sync: `registry`, and in every manifest: the registry of each
+  `spec.images[].name` and the `hauler.dev/registry` annotation; the host of
+  each Charts and ThickCharts `repoURL`, of a chart `name` that is a URL, and
+  of the `repoURL/name` reference hauler joins when that is a URL, checked
+  like Add Chart's; the registry of each ThickCharts `extraImages[].ref`; and
+  the host of every `http://` or `https://` `Files` path or `ImageTxts` ref
+  (see [Sync manifests](#sync-manifests)). A relative chart `repoURL` has no
+  host and stays a local path. Each host is looked up once per request, and
+  all of a Sync request's lookups share one 30-second limit.
+
+A blocked or unresolvable host gets HTTP 400 and no job. To use a registry or
+chart repository on your LAN, list its range in `HAULER_UI_FETCH_ALLOW_CIDRS`.
+hauler still uses `HTTP_PROXY` and `HTTPS_PROXY`, but the check runs in Wagon
+with its own DNS: if Wagon cannot resolve a public registry name, the request
+is refused even when the proxy could reach it.
+hauler resolves the name again when the job runs, so this check does not stop
+a DNS answer that changes in between.
+
+Only the first host is checked: the one in the request. Hosts that hauler or
+helm reach after it are not: HTTP redirects (including a registry's blob
+redirects and a `Files` URL that redirects to an internal address), the token
+realm a registry names in its auth challenge, absolute chart URLs in a
+repository's `index.yaml`, the images a ThickCharts chart renders, and the
+images an `ImageTxts` file lists.
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -172,7 +226,7 @@ file when the job ends. Leftovers from a crash are deleted at the next start.
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary storage for operations like sync and extract |
 | `DOCKER_CONFIG` | `/data/.docker` | Directory containing Docker registry authentication |
 | `HOME` | `/data` | Set to `/data` so that `hauler login` writes credentials to the persistent volume |
-| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Private ranges an Add File url may reach (see above) |
+| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Private ranges an Add File url, image registry or chart repository may be on (see above) |
 | `HAULER_UI_FETCH_MAX_BYTES` | `2147483648` | Max size of one Add File url download |
 | `HAULER_UI_FETCH_TIMEOUT` | `30m` | Max time for one Add File url download |
 

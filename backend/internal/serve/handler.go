@@ -176,7 +176,7 @@ func (h *Handler) portInUse(port int) bool {
 type ServeRegistryRequest struct {
 	HaulID    int64  `json:"haulId,omitempty"`
 	Port      int    `json:"port,omitempty"`
-	Readonly  bool   `json:"readonly,omitempty"`
+	Readonly  *bool  `json:"readonly,omitempty"` // nil (missing) means read-only
 	TLSCert   string `json:"tlsCert,omitempty"`
 	TLSKey    string `json:"tlsKey,omitempty"`
 	AutoTLS   bool   `json:"autoTls,omitempty"`
@@ -260,6 +260,14 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// hauler's registry serve exits at once on a store without index.json, which
+	// an empty haul made by an older Wagon lacks. Complete the empty layout so the
+	// registry starts with an empty catalog.
+	if err := hauls.EnsureStoreLayout(haul.StoreDir); err != nil {
+		http.Error(w, fmt.Sprintf("Failed to prepare store for haul %d: %v", haul.ID, err), http.StatusInternalServerError)
+		return
+	}
+
 	// Build args for hauler store serve registry command, scoped to the haul.
 	args := []string{"store", "serve", "registry", "--port", strconv.Itoa(port), "--store", haul.StoreDir}
 
@@ -269,8 +277,9 @@ func (h *Handler) ServeRegistry(w http.ResponseWriter, r *http.Request) {
 		req.Directory = filepath.Join(filepath.Dir(haul.StoreDir), "registry")
 	}
 
-	// Readonly flag (hauler default is true)
-	if req.Readonly {
+	// Readonly flag (hauler default is true). Pushes are allowed only when the
+	// caller sends readonly=false explicitly.
+	if req.Readonly == nil || *req.Readonly {
 		args = append(args, "--readonly")
 	} else {
 		args = append(args, "--readonly=false")

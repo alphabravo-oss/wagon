@@ -2,6 +2,7 @@ package hauls
 
 import (
 	"context"
+	"encoding/json"
 	"os"
 	"path/filepath"
 	"testing"
@@ -223,5 +224,54 @@ func TestEnsureDefault(t *testing.T) {
 	}
 	if len(list) != 1 {
 		t.Errorf("EnsureDefault should not create a second haul, got %d hauls", len(list))
+	}
+}
+
+// A new haul's store is a complete, empty OCI layout. hauler's registry serve
+// fails with "stat <store>/index.json: no such file or directory" without it.
+func TestCreateWritesEmptyIndex(t *testing.T) {
+	s := newTestService(t)
+	h, err := s.Create(context.Background(), "Empty", "")
+	if err != nil {
+		t.Fatalf("Create: %v", err)
+	}
+	data, err := os.ReadFile(filepath.Join(h.StoreDir, "index.json"))
+	if err != nil {
+		t.Fatalf("reading index.json: %v", err)
+	}
+	var index struct {
+		SchemaVersion int               `json:"schemaVersion"`
+		Manifests     []json.RawMessage `json:"manifests"`
+	}
+	if err := json.Unmarshal(data, &index); err != nil {
+		t.Fatalf("parsing index.json %q: %v", data, err)
+	}
+	if index.SchemaVersion != 2 || index.Manifests == nil || len(index.Manifests) != 0 {
+		t.Fatalf("index.json = %s, want schemaVersion 2 and an empty manifests list", data)
+	}
+}
+
+// EnsureStoreLayout fills in missing layout files and never overwrites the
+// ones a store already has.
+func TestEnsureStoreLayoutKeepsExistingFiles(t *testing.T) {
+	storeDir := filepath.Join(t.TempDir(), "store")
+	if err := os.MkdirAll(storeDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	const index = `{"schemaVersion":2,"manifests":[{"digest":"sha256:abc"}]}`
+	if err := os.WriteFile(filepath.Join(storeDir, "index.json"), []byte(index), 0o644); err != nil {
+		t.Fatal(err)
+	}
+
+	if err := EnsureStoreLayout(storeDir); err != nil {
+		t.Fatalf("EnsureStoreLayout: %v", err)
+	}
+	if got, _ := os.ReadFile(filepath.Join(storeDir, "index.json")); string(got) != index {
+		t.Fatalf("index.json = %s, want it unchanged", got)
+	}
+	for _, p := range []string{"oci-layout", filepath.Join("blobs", "sha256")} {
+		if _, err := os.Stat(filepath.Join(storeDir, p)); err != nil {
+			t.Errorf("%s missing: %v", p, err)
+		}
 	}
 }

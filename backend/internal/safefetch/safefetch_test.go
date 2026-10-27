@@ -13,6 +13,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 )
 
 // publicIP stands in for an internet host; tests route it to an httptest server.
@@ -299,5 +300,41 @@ func TestParseCIDRs(t *testing.T) {
 		if _, err := ParseCIDRs([]string{bad}); err == nil {
 			t.Errorf("%q: no error", bad)
 		}
+	}
+}
+
+// CheckHost runs on the request path, so a resolver that never answers must
+// not hold the request open.
+func TestCheckHost_LookupHasDeadline(t *testing.T) {
+	var deadline time.Time
+	var ok bool
+	f := New(Options{Lookup: func(ctx context.Context, _ string) ([]netip.Addr, error) {
+		deadline, ok = ctx.Deadline()
+		return []netip.Addr{netip.MustParseAddr(publicIP)}, nil
+	}})
+	start := time.Now()
+	if err := f.CheckHost(context.Background(), "example.com"); err != nil {
+		t.Fatalf("CheckHost: %v", err)
+	}
+	if !ok {
+		t.Fatal("lookup context has no deadline")
+	}
+	if d := deadline.Sub(start); d <= 0 || d > 30*time.Second {
+		t.Errorf("lookup deadline %v after the call, want at most 30s", d)
+	}
+}
+
+// The addresses a name resolves to stay out of the error, which callers show
+// to the user; otherwise the check answers DNS queries for internal names.
+func TestCheckHost_BlockedNameHidesAddress(t *testing.T) {
+	f := New(Options{Lookup: func(context.Context, string) ([]netip.Addr, error) {
+		return []netip.Addr{netip.MustParseAddr(publicIP), netip.MustParseAddr("10.1.2.3")}, nil
+	}})
+	err := f.CheckHost(context.Background(), "internal.example")
+	if !errors.Is(err, ErrBlocked) {
+		t.Fatalf("CheckHost = %v, want ErrBlocked", err)
+	}
+	if msg := err.Error(); strings.Contains(msg, "10.1.2.3") || !strings.Contains(msg, "internal.example") {
+		t.Errorf("CheckHost error %q: want the host name and not the address", msg)
 	}
 }
