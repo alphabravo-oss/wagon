@@ -92,6 +92,22 @@ func (h *Handler) importFile(field, p string) (string, error) {
 	return resolved, nil
 }
 
+// certsFile confines a key, cert or CA file the caller names in a request
+// field (add-image and sync key, add-chart keyFile, certFile and caFile) to an
+// existing regular file in <DataDir>/certs, the folder Serve also reads its TLS
+// files from. A relative path is taken from <DataDir>/certs, so "registry.pub"
+// is <DataDir>/certs/registry.pub. A key named inside a sync manifest is
+// different: hauler takes it from the data folder (see manifestKey). hauler
+// runs as root, so any other path would be an arbitrary read. The error names
+// field but no host path.
+func (h *Handler) certsFile(field, p string) (string, error) {
+	resolved, err := safepath.ConfineFile(filepath.Join(h.Cfg.DataDir, "certs"), p)
+	if err != nil {
+		return "", fmt.Errorf("%s must be a file in Wagon's certs folder (<data>/certs): %w", field, err)
+	}
+	return resolved, nil
+}
+
 // remoteFileURL checks that an add-file url is an http or https URL with a
 // host. Wagon downloads it itself (see fetchTempFile); hauler never sees it.
 func remoteFileURL(raw string) (*url.URL, error) {

@@ -77,6 +77,14 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	// The request key is checked before the copy is written, so a refused key
+	// leaves no copy behind. Unlike a key inside the manifest, a relative
+	// request key is taken from <DataDir>/certs (see certsFile).
+	key, err := h.certsFile("key", req.Key)
+	if err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 	tempFile, err := h.writeTempManifest(string(manifest))
 	if err != nil {
 		log.Printf("Error writing temp manifest: %v", err)
@@ -91,8 +99,8 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Optional key for signature verification
-	if req.Key != "" {
-		args = append(args, "--key", req.Key)
+	if key != "" {
+		args = append(args, "--key", key)
 	}
 
 	// Keyless options

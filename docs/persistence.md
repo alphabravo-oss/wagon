@@ -79,11 +79,13 @@ paths are taken from the folder, and symlinks are resolved before the check.
 | Add File | `url` | an `http://` or `https://` URL with a host (no bare paths, no `file://`). Wagon downloads it to a temporary file in `/data/imports` and hauler adds that file; hauler never sees the URL |
 | Load | `filenames` | a plain file name is an archive in the haul's `archives` folder; any other path must be an existing file in `/data/imports` |
 | Sync | `filenames` | existing files in `/data/imports`; default `/data/imports/hauler-manifest.yaml` |
-| Sync | local paths inside a manifest | an existing file or folder below `/data/imports` (see [Sync manifests](#sync-manifests)) |
+| Sync | local paths inside a manifest | an existing file or folder below `/data/imports`; a cosign key may instead be a regular file in `/data/certs`. Unlike every other row, a relative path is taken from `/data` (see [Sync manifests](#sync-manifests)) |
 | Extract | `outputDir` | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders; default `/data/hauls/<slug>/extracted` |
 | Copy Store | `dir://` target | a folder inside the haul's folder, outside its `store`, `archives` and `registry` folders |
 | Serve | `directory` | a folder inside the haul's folder, outside its store |
 | Serve | `tlsCert`, `tlsKey` | an existing file in `/data/certs` |
+| Sync, Add Image | `key` | an existing regular file in `/data/certs`. A relative path is taken from `/data/certs` (`registry.pub` is `/data/certs/registry.pub`). A key inside a Sync manifest follows different rules (see [Sync manifests](#sync-manifests)) |
+| Add Chart | `keyFile`, `certFile`, `caFile` | an existing regular file in `/data/certs` |
 
 To add a local file, put it in `/data/imports` first (with the compose file,
 that is `deploy/data/imports/` on the host), then enter its name, such as
@@ -119,7 +121,10 @@ with symlinks followed. Each one must be an existing file or folder below
   `"/127.0.0.1/x"` would name `oci://127.0.0.1/x`.
 - `Images`: `spec.images[].key` and the `hauler.dev/key` annotation (cosign
   public keys). A key must be a regular file in `/data/imports` or
-  `/data/certs`; folders, `~` paths and KMS URIs are refused. `Files` paths
+  `/data/certs`; folders, `~` paths and KMS URIs are refused. Like every
+  path in a manifest, a relative key is taken from `/data`, so a key in
+  `/data/certs` is `certs/registry.pub` here, but `registry.pub` in the
+  request's `key` field. An absolute path works in both. `Files` paths
   may not come from `/data/certs`, since that folder holds Serve's TLS key.
 
 Only `content.hauler.cattle.io` and `collection.hauler.cattle.io` documents

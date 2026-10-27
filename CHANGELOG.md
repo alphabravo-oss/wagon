@@ -14,6 +14,14 @@ All notable changes to Wagon will be documented in this file.
   are taken from those folders, symlinks are resolved before the check, and
   anything else gets HTTP 400 before hauler starts. Serve request bodies are
   capped at 64 KiB (HTTP 413).
+- Add Image, Add Chart and Sync no longer let a signed-in user make hauler,
+  which runs as root, read any host file through a key or TLS file (card 68).
+  `key` on `POST /api/store/add-image` and `/api/store/sync`, and `keyFile`,
+  `certFile` and `caFile` on `POST /api/store/add-chart`, must be existing
+  regular files in `<data>/certs`; before, any path was passed through. A
+  relative path is taken from `<data>/certs`, symlinks are resolved before
+  the check, and anything else gets HTTP 400 before hauler starts. Sync and
+  Load `filenames` are confined too (card 69, below).
 - Store endpoints reject values that hauler takes as positional arguments
   (`imageRef`, chart `name`, `filePath`, `url`, `match`, `artifactRef`) when
   they start with `-`, with HTTP 400.
@@ -94,8 +102,10 @@ All notable changes to Wagon will be documented in this file.
   start, except one a queued job still needs.
 - A Sync manifest's cosign key (`spec.images[].key` or the `hauler.dev/key`
   annotation) must be a regular file in `<data>/imports` or `<data>/certs`
-  (card 111). `<data>/certs` is also the folder for the request's `key` once
-  card 68 lands, so one key file can serve both. A folder or a missing file gets HTTP 400 before a job
+  (card 111). `<data>/certs` is also the folder for the request's `key`
+  (card 68), so one key file can serve both. A manifest key is taken from the
+  data folder (`certs/registry.pub`), the request's `key` from `<data>/certs`
+  (`registry.pub`). A folder or a missing file gets HTTP 400 before a job
   exists; before, a folder in imports passed the check. `Files` paths and every
   other local path in a manifest still have to be in `<data>/imports`.
 - A Sync manifest's `http://` or `https://` `Files` path or `ImageTxts` ref
@@ -131,6 +141,13 @@ All notable changes to Wagon will be documented in this file.
   (HTTP 400). Extract and Copy write only inside the
   haul's folder, and Extract without `outputDir` writes to `<haul>/extracted`.
   Requests that used other paths now get HTTP 400 (see Security above).
+- Signing keys and chart TLS files go in `<data>/certs`: Add Image and Sync
+  `key`, and Add Chart `keyFile`, `certFile` and `caFile`. A relative request
+  path is taken from `<data>/certs` (`registry.pub` means
+  `<data>/certs/registry.pub`); a key named inside a Sync manifest is instead
+  taken from the data folder, so there it is `certs/registry.pub`. An
+  absolute path to the file works in both. `key` must be a file: cosign
+  key references such as KMS URIs or `https://` URLs now get HTTP 400.
 - **Breaking:** Sync reads manifest files only from `<data>/imports` (no
   manifest URLs in `filenames`), and every local path inside a manifest must
   be there too. A relative filename,

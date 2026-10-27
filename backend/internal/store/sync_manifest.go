@@ -381,8 +381,9 @@ func (h *Handler) manifestChartURL(ctx context.Context, field, v string) error {
 // manifestKey checks a cosign public key path. It must be an existing regular
 // file in <DataDir>/imports or <DataDir>/certs, where the request's key goes;
 // hauler only verifies with it. hauler runs in the data folder, so a relative
-// path is taken from there. hauler expands a leading ~ to root's home folder,
-// so that form is refused.
+// path is taken from there ("certs/registry.pub"), unlike the request's key,
+// which certsFile takes from <DataDir>/certs ("registry.pub"). hauler expands
+// a leading ~ to root's home folder, so that form is refused.
 func (h *Handler) manifestKey(key string) error {
 	if key == "" {
 		return nil
