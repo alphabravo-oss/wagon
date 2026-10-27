@@ -54,8 +54,26 @@ func (h *Handler) checkRepoURL(ctx context.Context, field, repoURL string) error
 	return h.checkHost(ctx, field, u.Hostname())
 }
 
+// hostChecksKey holds a request's map of host check results, set by
+// withHostChecks.
+type hostChecksKey struct{}
+
+// withHostChecks makes checkHost look each host up once for the rest of the
+// request, so a Sync manifest naming a host many times costs one lookup.
+func withHostChecks(ctx context.Context) context.Context {
+	return context.WithValue(ctx, hostChecksKey{}, map[string]error{})
+}
+
 func (h *Handler) checkHost(ctx context.Context, field, host string) error {
-	if err := h.Fetcher.CheckHost(ctx, host); err != nil {
+	seen, _ := ctx.Value(hostChecksKey{}).(map[string]error)
+	err, ok := seen[host]
+	if !ok {
+		err = h.Fetcher.CheckHost(ctx, host)
+		if seen != nil {
+			seen[host] = err
+		}
+	}
+	if err != nil {
 		return fmt.Errorf("%s: %w", field, err)
 	}
 	return nil
