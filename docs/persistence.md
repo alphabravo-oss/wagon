@@ -163,6 +163,40 @@ file when the job ends. Leftovers from a crash are deleted at the next start.
 - A url job shows as running while it downloads. It does not wait for a free
   slot under `HAULER_UI_MAX_CONCURRENT_JOBS`, but it counts towards it.
 
+### Registries and chart repositories
+
+hauler, not Wagon, connects to image registries and chart repositories. Before
+it creates the job, Wagon resolves these hosts and checks every address they
+resolve to against the same rules as Add File urls:
+
+- Add Image: the registry in `imageRef`, such as `registry.example.com:5000`
+  in `registry.example.com:5000/app:1`. A reference without a registry, such
+  as `nginx:1.27`, goes to Docker Hub and is not checked.
+- Add Chart: the host of `repoUrl`, such as `https://charts.example.com` or
+  `oci://registry.example.com/charts`, and the host of `name` when the chart
+  name is a URL, such as `oci://ghcr.io/org/charts/app`. A `repoUrl` or URL
+  `name` that is not a valid URL is refused, and so is one with a port but no
+  host name, such as `http://:8080/x.tgz`. A value with no host, such as
+  `grafana` or `bitnami/nginx`, is left to hauler. Wagon's parsing is close to
+  helm's but not proven identical: a value the two read differently could
+  still reach a host Wagon did not check.
+- Sync: `registry`.
+
+A blocked or unresolvable host gets HTTP 400 and no job. To use a registry or
+chart repository on your LAN, list its range in `HAULER_UI_FETCH_ALLOW_CIDRS`.
+hauler still uses `HTTP_PROXY` and `HTTPS_PROXY`, but the check runs in Wagon
+with its own DNS: if Wagon cannot resolve a public registry name, the request
+is refused even when the proxy could reach it.
+hauler resolves the name again when the job runs, so this check does not stop
+a DNS answer that changes in between. Image and chart references inside a Sync
+manifest are not checked.
+
+Only the first host is checked: the one in the request. Hosts that hauler or
+helm reach after it are not: HTTP redirects (including a registry's blob
+redirects), the token realm a registry names in its auth challenge, absolute
+chart URLs in a repository's `index.yaml`, chart dependencies
+(`addDependencies`) and images listed inside a chart (`addImages`).
+
 ## Environment Variables
 
 | Variable | Default | Description |
@@ -172,7 +206,7 @@ file when the job ends. Leftovers from a crash are deleted at the next start.
 | `HAULER_TEMP_DIR` | `/data/tmp` | Temporary storage for operations like sync and extract |
 | `DOCKER_CONFIG` | `/data/.docker` | Directory containing Docker registry authentication |
 | `HOME` | `/data` | Set to `/data` so that `hauler login` writes credentials to the persistent volume |
-| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Private ranges an Add File url may reach (see above) |
+| `HAULER_UI_FETCH_ALLOW_CIDRS` | (empty) | Private ranges an Add File url, image registry or chart repository may be on (see above) |
 | `HAULER_UI_FETCH_MAX_BYTES` | `2147483648` | Max size of one Add File url download |
 | `HAULER_UI_FETCH_TIMEOUT` | `30m` | Max time for one Add File url download |
 

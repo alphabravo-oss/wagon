@@ -104,11 +104,12 @@ func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
 		t.Fatalf("ensuring default haul: %v", err)
 	}
 	handler := NewHandler(runner, cfg, haulSvc)
-	// Tests never reach the network: names do not resolve unless a test swaps
-	// in its own Fetcher.
+	// Tests never reach the network: every name resolves to a public address,
+	// so registry and chart repo checks pass, but no connection is made
+	// unless a test swaps in its own Fetcher.
 	handler.Fetcher = safefetch.New(safefetch.Options{
 		Lookup: func(context.Context, string) ([]netip.Addr, error) {
-			return nil, errors.New("no DNS in tests")
+			return []netip.Addr{netip.MustParseAddr("93.184.216.34")}, nil
 		},
 		Dial: func(context.Context, string, string) (net.Conn, error) {
 			return nil, errors.New("no network in tests")

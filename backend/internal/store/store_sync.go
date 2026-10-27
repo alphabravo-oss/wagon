@@ -48,6 +48,10 @@ func (h *Handler) Sync(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, errProductsRemoved, http.StatusBadRequest)
 		return
 	}
+	if err := h.checkRegistry(r.Context(), "registry", req.Registry); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
