@@ -49,6 +49,10 @@ func (h *Handler) AddImage(w http.ResponseWriter, r *http.Request) {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
+	if err := h.checkRegistry(r.Context(), "imageRef", imageRegistry(req.ImageRef)); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
 
 	haul, storeArgs, err := h.resolveHaul(r.Context(), req.HaulID)
 	if err != nil {
@@ -154,6 +158,15 @@ func (h *Handler) AddChart(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	if err := rejectFlagLike("name", req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	// helm pulls a name that is an oci:// or http(s) URL directly.
+	if err := h.checkRepoURL(r.Context(), "name", req.Name); err != nil {
+		http.Error(w, err.Error(), http.StatusBadRequest)
+		return
+	}
+	if err := h.checkRepoURL(r.Context(), "repoUrl", req.RepoURL); err != nil {
 		http.Error(w, err.Error(), http.StatusBadRequest)
 		return
 	}
