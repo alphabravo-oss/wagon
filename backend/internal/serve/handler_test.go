@@ -11,6 +11,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
@@ -746,5 +747,67 @@ func TestServeRegistry_ArgsNeverIncludeConfig(t *testing.T) {
 				}
 			}
 		})
+	}
+}
+
+// A registry started without a "readonly" field must be read-only: hauler only
+// accepts pushes when the caller asks for readonly=false explicitly.
+func TestServeRegistry_ReadonlyDefaultsToTrue(t *testing.T) {
+	shortGrace(t, 50*time.Millisecond)
+	for _, tc := range []struct {
+		body string
+		want string
+	}{
+		{`{"port":5093}`, "--readonly"},
+		{`{"port":5093,"readonly":true}`, "--readonly"},
+		{`{"port":5093,"readonly":false}`, "--readonly=false"},
+	} {
+		t.Run(tc.body, func(t *testing.T) {
+			argsFile := filepath.Join(t.TempDir(), "args")
+			fakeHauler(t, `printf '%s\n' "$@" > '`+argsFile+`'; exec sleep 30`)
+			e := newTestEnv(t)
+
+			rr := httptest.NewRecorder()
+			e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(tc.body)))
+			t.Cleanup(e.handler.StopAll)
+			if rr.Code != http.StatusCreated {
+				t.Fatalf("status = %d (%s), want 201", rr.Code, rr.Body.String())
+			}
+			raw, err := os.ReadFile(argsFile)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var readonly []string
+			for _, a := range strings.Fields(string(raw)) {
+				if strings.HasPrefix(a, "--readonly") {
+					readonly = append(readonly, a)
+				}
+			}
+			if len(readonly) != 1 || readonly[0] != tc.want {
+				t.Fatalf("readonly flags = %q, want [%q]", readonly, tc.want)
+			}
+		})
+	}
+}
+
+// A haul created before Wagon wrote index.json has a store hauler's registry
+// serve cannot open. Starting a registry on it must work and serve an empty
+// catalog, not fail with 500.
+func TestServeRegistry_EmptyStoreWithoutIndexStarts(t *testing.T) {
+	shortGrace(t, 50*time.Millisecond)
+	// Like hauler v1.3.2: the registry exits at once when index.json is missing.
+	fakeHauler(t, `while [ $# -gt 0 ]; do [ "$1" = --store ] && store=$2; shift; done
+[ -f "$store/index.json" ] || { echo "ERR function execution failed: signed image index: stat $store/index.json: no such file or directory"; exit 1; }
+exec sleep 30`)
+	e := newTestEnv(t)
+	if err := os.Remove(filepath.Join(e.haul.StoreDir, "index.json")); err != nil && !os.IsNotExist(err) {
+		t.Fatal(err)
+	}
+
+	rr := httptest.NewRecorder()
+	e.handler.ServeRegistry(rr, httptest.NewRequest(http.MethodPost, "/api/serve/registry", strings.NewReader(`{"port":5094}`)))
+	t.Cleanup(e.handler.StopAll)
+	if rr.Code != http.StatusCreated {
+		t.Fatalf("status = %d (%s), want 201", rr.Code, rr.Body.String())
 	}
 }

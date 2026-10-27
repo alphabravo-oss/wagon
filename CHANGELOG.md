@@ -186,6 +186,13 @@ All notable changes to Wagon will be documented in this file.
   env vars that hauler 1.3.2 does not read, and stored the password in the job
   row. hauler saves credentials without checking them, so the UI and API now
   say the login was saved, not verified; a wrong password fails at pull or push.
+- Starting a registry serve on an empty haul no longer fails with HTTP 500
+  (`stat …/index.json: no such file or directory`); it starts with an empty
+  catalog. New hauls get an empty `index.json`, and existing empty hauls get one
+  when a registry serve starts.
+- `POST /api/serve/registry` without a `readonly` field now starts a read-only
+  registry. Pushes need `"readonly": false` explicitly (the Serve page always
+  sends the field, so it is unaffected).
 
 ## [0.1.0] - 2026-07-11
 
