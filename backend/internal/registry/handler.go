@@ -2,12 +2,12 @@ package registry
 
 import (
 	"encoding/json"
-	"fmt"
 	"log"
 	"net/http"
 	"strings"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/config"
+	"github.com/alphabravo-oss/wagon/backend/internal/httpjson"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 )
 
@@ -50,8 +50,7 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LoginRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	if !httpjson.Decode(w, r, &req, maxRegistryBody) {
 		return
 	}
 
@@ -104,8 +103,7 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req LogoutRequest
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
-		http.Error(w, fmt.Sprintf("Invalid request body: %v", err), http.StatusBadRequest)
+	if !httpjson.Decode(w, r, &req, maxRegistryBody) {
 		return
 	}
 
@@ -122,20 +120,15 @@ func (h *Handler) Logout(w http.ResponseWriter, r *http.Request) {
 	// Build args for hauler logout command
 	args := []string{"logout", req.Registry}
 
-	// Create a job for the logout operation
-	job, err := h.jobRunner.CreateJob(r.Context(), "hauler", args, nil)
+	// Created as running and started on a background context, so it runs
+	// exactly once and outlives this request. Logout has no secret, so stdin
+	// is empty.
+	job, err := h.jobRunner.CreateStdinJob(r.Context(), "hauler", args, nil)
 	if err != nil {
 		log.Printf("Error creating logout job: %v", err)
 		http.Error(w, "Failed to create logout job", http.StatusInternalServerError)
 		return
 	}
-
-	// Start the job in background
-	go func() {
-		if err := h.jobRunner.Start(r.Context(), job.ID); err != nil {
-			log.Printf("Error starting logout job %d: %v", job.ID, err)
-		}
-	}()
 
 	w.Header().Set("Content-Type", "application/json")
 	w.WriteHeader(http.StatusAccepted)
@@ -172,6 +165,10 @@ func (h *Handler) Info(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(info)
 }
+
+// maxRegistryBody caps a login or logout request body. The requests are a few
+// short fields.
+const maxRegistryBody = 1 << 20
 
 // RegisterRoutes registers the registry routes with the given mux
 func (h *Handler) RegisterRoutes(mux *http.ServeMux) {

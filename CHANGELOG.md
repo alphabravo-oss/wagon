@@ -214,6 +214,18 @@ All notable changes to Wagon will be documented in this file.
 - `POST /api/serve/registry` without a `readonly` field now starts a read-only
   registry. Pushes need `"readonly": false` explicitly (the Serve page always
   sends the field, so it is unaffected).
+- Registry logout runs hauler exactly once and finishes even after the request
+  ends. Before, it created a queued job and also started it under the request's
+  context: the request ending could kill `hauler logout` or leave the job
+  stuck, and the job processor could start the same job a second time. The job
+  is now created as running and started in the background.
+- `POST /api/registry/login` and `/api/registry/logout` cap the request body at
+  1 MiB (HTTP 413), like the store endpoints.
+- `POST /api/jobs/<id>/cleanup` stops the job before marking it failed: it
+  kills the job's command, or cancels an Add File `url` download that is still
+  running so hauler never starts. Before, the command kept running (or started
+  once the download finished) and its real exit later overwrote the failed
+  status.
 
 ## [0.1.0] - 2026-07-11
 

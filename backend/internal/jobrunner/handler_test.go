@@ -6,8 +6,11 @@ import (
 	"encoding/json"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strconv"
 	"strings"
+	"syscall"
 	"testing"
 	"time"
 
@@ -119,5 +122,102 @@ func TestRedactArgs(t *testing.T) {
 	}
 	if in[2] != "s1" {
 		t.Error("RedactArgs mutated its input")
+	}
+}
+
+// Cleanup must kill a stuck job's command, not only mark the job failed.
+func TestCleanupStaleJobKillsProcess(t *testing.T) {
+	r := New(setupTestDB(t), t.TempDir())
+	pidFile := filepath.Join(t.TempDir(), "pid")
+	job, err := r.CreateJob(context.Background(), "/bin/sh",
+		[]string{"-c", "echo $$ > " + pidFile + "; exec sleep 30"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := r.Start(context.Background(), job.ID); err != nil {
+		t.Fatal(err)
+	}
+	var pid int
+	deadline := time.Now().Add(3 * time.Second)
+	for pid == 0 && time.Now().Before(deadline) {
+		if b, err := os.ReadFile(pidFile); err == nil && strings.HasSuffix(string(b), "\n") {
+			pid, _ = strconv.Atoi(strings.TrimSpace(string(b)))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	if pid == 0 {
+		t.Fatal("job command did not start")
+	}
+	t.Cleanup(func() { _ = syscall.Kill(pid, syscall.SIGKILL) })
+
+	h := NewHandler(r, &config.Config{})
+	w := httptest.NewRecorder()
+	h.CleanupStaleJob(w, httptest.NewRequest(http.MethodPost, "/api/jobs/"+strconv.FormatInt(job.ID, 10)+"/cleanup", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+
+	// Killed and reaped: signal 0 fails once the process is gone.
+	deadline = time.Now().Add(3 * time.Second)
+	for syscall.Kill(pid, 0) == nil {
+		if time.Now().After(deadline) {
+			t.Fatal("job process still running after cleanup")
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+	end, err := r.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.Status != StatusFailed {
+		t.Errorf("status %q, want %q", end.Status, StatusFailed)
+	}
+}
+
+// Cleanup during a prepared job's prepare step (an Add File download) must
+// stop it, and the command must never start afterwards, even when prepare
+// finishes without an error just as cleanup lands.
+func TestCleanupStaleJobStopsPreparedJob(t *testing.T) {
+	r := New(setupTestDB(t), t.TempDir())
+	marker := filepath.Join(t.TempDir(), "ran")
+	preparing := make(chan struct{})
+	cleaned := make(chan struct{})
+	job, err := r.CreatePreparedJob(context.Background(), "/bin/sh", []string{"-c", "touch " + marker},
+		func(ctx context.Context, _ func(string)) error {
+			close(preparing)
+			<-ctx.Done()
+			return nil
+		},
+		func() { close(cleaned) })
+	if err != nil {
+		t.Fatal(err)
+	}
+	select {
+	case <-preparing:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prepare did not start")
+	}
+
+	h := NewHandler(r, &config.Config{})
+	w := httptest.NewRecorder()
+	h.CleanupStaleJob(w, httptest.NewRequest(http.MethodPost, "/api/jobs/"+strconv.FormatInt(job.ID, 10)+"/cleanup", nil))
+	if w.Code != http.StatusOK {
+		t.Fatalf("status %d body %q", w.Code, w.Body.String())
+	}
+
+	select {
+	case <-cleaned:
+	case <-time.After(3 * time.Second):
+		t.Fatal("prepared job did not end after cleanup")
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Errorf("command ran after cleanup (stat err %v)", err)
+	}
+	end, err := r.GetJob(context.Background(), job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end.Status != StatusFailed {
+		t.Errorf("status %q, want %q", end.Status, StatusFailed)
 	}
 }

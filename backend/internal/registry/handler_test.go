@@ -224,6 +224,95 @@ func TestLogoutEmptyBodyIsBadRequest(t *testing.T) {
 	}
 }
 
+// Logout must run hauler exactly once and finish even though the request
+// context is cancelled as soon as the handler returns. A fake hauler on PATH
+// counts its runs and finishes after a short sleep.
+func TestLogoutRunsOnceAndOutlivesRequest(t *testing.T) {
+	bin := t.TempDir()
+	script := "#!/bin/sh\n" +
+		"echo run >> " + bin + "/runs\n" +
+		"sleep 0.5\n" +
+		"echo fake hauler logout done\n"
+	if err := os.WriteFile(filepath.Join(bin, "hauler"), []byte(script), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	h, runner := newTestHandler(t, &config.Config{})
+	ctx, cancel := context.WithCancel(context.Background())
+	req := httptest.NewRequest(http.MethodPost, "/api/registry/logout",
+		strings.NewReader(`{"registry":"registry.example.com"}`)).WithContext(ctx)
+	rec := httptest.NewRecorder()
+	h.Logout(rec, req)
+	if rec.Code != http.StatusAccepted {
+		t.Fatalf("status %d body %q", rec.Code, rec.Body.String())
+	}
+	var resp struct {
+		JobID int64 `json:"jobId"`
+	}
+	if err := json.Unmarshal(rec.Body.Bytes(), &resp); err != nil {
+		t.Fatal(err)
+	}
+
+	// The job processor starts every queued job, so a queued row would run twice.
+	job, err := runner.GetJob(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status == jobrunner.StatusQueued {
+		t.Errorf("job is %q when the handler returns; the job processor would start it again", job.Status)
+	}
+	// The server cancels the request context once the handler returns.
+	cancel()
+
+	waitForJobSettled(t, runner, resp.JobID)
+	job, err = runner.GetJob(context.Background(), resp.JobID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if job.Status != jobrunner.StatusSucceeded {
+		t.Errorf("job status %q, want %q", job.Status, jobrunner.StatusSucceeded)
+	}
+	runs, err := os.ReadFile(filepath.Join(bin, "runs"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if n := strings.Count(string(runs), "run\n"); n != 1 {
+		t.Errorf("hauler ran %d times, want 1", n)
+	}
+}
+
+func TestRegistryRequestBodyIsCapped(t *testing.T) {
+	h, runner := newTestHandler(t, &config.Config{})
+	// Valid JSON, so only the size can make it fail.
+	pad := strings.Repeat("x", maxRegistryBody)
+	for _, tc := range []struct {
+		name string
+		fn   http.HandlerFunc
+		path string
+		body string
+	}{
+		{"login", h.Login, "/api/registry/login", `{"registry":"registry.example.com","username":"a","password":"p","pad":"` + pad + `"}`},
+		{"logout", h.Logout, "/api/registry/logout", `{"registry":"registry.example.com","pad":"` + pad + `"}`},
+	} {
+		rec := httptest.NewRecorder()
+		tc.fn(rec, httptest.NewRequest(http.MethodPost, tc.path, strings.NewReader(tc.body)))
+		if rec.Code != http.StatusRequestEntityTooLarge {
+			t.Errorf("%s: status %d, want %d", tc.name, rec.Code, http.StatusRequestEntityTooLarge)
+		}
+	}
+	jobs, err := runner.ListJobs(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, job := range jobs {
+		waitForJobSettled(t, runner, job.ID)
+	}
+	if len(jobs) != 0 {
+		t.Errorf("expected no jobs for oversized bodies, got %d", len(jobs))
+	}
+}
+
 func TestInfoReturnsDockerAuthPathAndFriendlyDisplayPath(t *testing.T) {
 	cfg := &config.Config{
 		DockerAuthPath: "/data/.docker/config.json",

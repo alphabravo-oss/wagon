@@ -323,6 +323,10 @@ func (h *Handler) CleanupStaleJob(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 
+	// Stop the job first (its download or its command), so a stuck job cannot
+	// keep running and later overwrite the failed status with its real exit.
+	h.runner.stopJob(jobID)
+
 	// Update job to failed status
 	_, err = h.runner.db.ExecContext(r.Context(),
 		`UPDATE jobs

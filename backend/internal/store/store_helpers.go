@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/alphabravo-oss/wagon/backend/internal/hauls"
+	"github.com/alphabravo-oss/wagon/backend/internal/httpjson"
 	"github.com/alphabravo-oss/wagon/backend/internal/jobrunner"
 	"github.com/alphabravo-oss/wagon/backend/internal/safepath"
 )
@@ -26,8 +27,7 @@ const maxStoreBody = 1 << 20
 // decodeStoreRequest reads a capped JSON body into v. It writes 413 for an
 // oversized body and 400 for invalid JSON, and reports whether v is usable.
 func decodeStoreRequest(w http.ResponseWriter, r *http.Request, v any) bool {
-	_, ok := readStoreRequest(w, r, v)
-	return ok
+	return httpjson.Decode(w, r, v, maxStoreBody)
 }
 
 // readStoreRequest is decodeStoreRequest that also returns the raw body.
