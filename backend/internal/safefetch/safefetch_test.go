@@ -239,6 +239,26 @@ func TestDownload_SizeCap(t *testing.T) {
 	}
 }
 
+// A symlink at dst is refused, not followed (review 88, finding 5).
+func TestDownload_SymlinkDstNotFollowed(t *testing.T) {
+	remote := serve(t, "REMOTE-BODY", nil)
+	n := &fakeNet{hosts: map[string]string{"files.example": publicIP}, routes: map[string]*httptest.Server{publicIP: remote}}
+	dir := t.TempDir()
+	target, dst := filepath.Join(dir, "target"), filepath.Join(dir, "dl")
+	if err := os.WriteFile(target, []byte("KEEP"), 0600); err != nil {
+		t.Fatal(err)
+	}
+	if err := os.Symlink(target, dst); err != nil {
+		t.Fatal(err)
+	}
+	if _, err := n.fetcher(t, Options{}).Download(context.Background(), "http://files.example/f", dst); err == nil {
+		t.Error("download through a symlink succeeded, want an error")
+	}
+	if b, _ := os.ReadFile(target); string(b) != "KEEP" {
+		t.Errorf("symlink target now %q, want it untouched", b)
+	}
+}
+
 func TestDownload_RejectsNonHTTPAndErrors(t *testing.T) {
 	notFound := httptest.NewServer(http.NotFoundHandler())
 	t.Cleanup(notFound.Close)

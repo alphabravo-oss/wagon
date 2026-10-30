@@ -214,6 +214,12 @@ All notable changes to Wagon will be documented in this file.
 - `POST /api/serve/registry` without a `readonly` field now starts a read-only
   registry. Pushes need `"readonly": false` explicitly (the Serve page always
   sends the field, so it is unaffected).
+- An Add File `url` job can no longer start hauler before the download has
+  finished. The job was created as queued and switched to running in a second
+  step, so the job processor could start hauler on the still-empty download
+  file; it is now created as running. A failed write of a job's final status is
+  logged instead of silently leaving the job "running", and the download is
+  written with `O_NOFOLLOW`, so a symlink at its temp path is refused (card 71).
 - Registry logout runs hauler exactly once and finishes even after the request
   ends. Before, it created a queued job and also started it under the request's
   context: the request ending could kill `hauler logout` or leave the job

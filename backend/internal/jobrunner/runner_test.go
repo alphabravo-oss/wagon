@@ -8,6 +8,8 @@ import (
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
+	"slices"
 	"strings"
 	"testing"
 	"time"
@@ -631,6 +633,75 @@ func TestCreatePreparedJob(t *testing.T) {
 				t.Errorf("logs %q, want %q and %q", joined, "preparing", tc.wantLog)
 			}
 		})
+	}
+}
+
+// A prepared job is never queued, so the job processor cannot start its
+// command on the file prepare is still writing (review 88, findings 1 and 4).
+func TestCreatePreparedJobNeverQueued(t *testing.T) {
+	db := setupTestDB(t)
+	// Record every status the row ever has, including the inserted one.
+	if _, err := db.Exec(`
+		CREATE TABLE status_history (job_id INTEGER, status TEXT);
+		CREATE TRIGGER jobs_insert AFTER INSERT ON jobs BEGIN
+			INSERT INTO status_history VALUES (NEW.id, NEW.status);
+		END;
+		CREATE TRIGGER jobs_update AFTER UPDATE OF status ON jobs BEGIN
+			INSERT INTO status_history VALUES (NEW.id, NEW.status);
+		END;`); err != nil {
+		t.Fatal(err)
+	}
+	runner := New(db, t.TempDir())
+	ctx := context.Background()
+	file := filepath.Join(t.TempDir(), "download")
+	if err := os.WriteFile(file, nil, 0600); err != nil {
+		t.Fatal(err)
+	}
+
+	release := make(chan struct{})
+	job, err := runner.CreatePreparedJob(ctx, "cat", []string{file},
+		func(context.Context, func(string)) error {
+			<-release
+			return os.WriteFile(file, []byte("COMPLETE"), 0600)
+		}, nil)
+	if err != nil {
+		t.Fatalf("CreatePreparedJob: %v", err)
+	}
+
+	// One pass of the job processor in main.go while the download is open.
+	queued := StatusQueued
+	jobs, err := runner.ListJobs(ctx, &queued)
+	if err != nil {
+		t.Fatal(err)
+	}
+	for _, j := range jobs {
+		t.Errorf("job %d is queued while its file is incomplete", j.ID)
+		_ = runner.Start(ctx, j.ID)
+	}
+	close(release)
+
+	got := waitForEnd(t, runner, job.ID)
+	if got.Status != StatusSucceeded {
+		t.Fatalf("status %s, want succeeded", got.Status)
+	}
+	if out := logText(t, runner, job.ID); out != "COMPLETE\n" {
+		t.Errorf("command output %q, want only the complete file", out)
+	}
+	var history []string
+	rows, err := db.Query(`SELECT status FROM status_history WHERE job_id = ? ORDER BY rowid`, job.ID)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer func() { _ = rows.Close() }()
+	for rows.Next() {
+		var s string
+		if err := rows.Scan(&s); err != nil {
+			t.Fatal(err)
+		}
+		history = append(history, s)
+	}
+	if slices.Contains(history, string(StatusQueued)) {
+		t.Errorf("status history %q: the job was queued, so the job processor could start it", history)
 	}
 }
 

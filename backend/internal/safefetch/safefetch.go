@@ -317,7 +317,8 @@ func (f *Fetcher) Download(ctx context.Context, rawURL, dst string) (int64, erro
 		return 0, fmt.Errorf("file is %d bytes, over the %d byte limit (HAULER_UI_FETCH_MAX_BYTES)", resp.ContentLength, f.maxBytes)
 	}
 
-	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC, 0600)
+	// O_NOFOLLOW: a symlink planted at dst must not redirect the write.
+	out, err := os.OpenFile(dst, os.O_WRONLY|os.O_CREATE|os.O_TRUNC|syscall.O_NOFOLLOW, 0600)
 	if err != nil {
 		return 0, err
 	}
