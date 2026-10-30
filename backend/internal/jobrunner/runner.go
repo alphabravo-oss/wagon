@@ -94,9 +94,8 @@ func (r *Runner) CreateStdinJob(ctx context.Context, command string, args []stri
 	bg := context.Background()
 	if _, err := r.start(bg, job.ID, stdin); err != nil {
 		_ = r.appendLog(bg, job.ID, "stderr", err.Error())
-		completedAt := time.Now()
 		exitCode := -1
-		_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+		r.finish(bg, job.ID, StatusFailed, nil, &exitCode)
 	}
 	return job, nil
 }
@@ -115,12 +114,19 @@ func (r *Runner) createJob(ctx context.Context, command string, args []string, e
 		return nil, fmt.Errorf("marshaling env overrides: %w", err)
 	}
 
+	// A job created as running is started by its creator, not the job processor.
+	var startedAt *time.Time
+	if status == StatusRunning {
+		now := time.Now()
+		startedAt = &now
+	}
+
 	var jobID int64
 	err = r.db.QueryRowContext(ctx,
-		`INSERT INTO jobs (command, args, env_overrides, status)
-		 VALUES (?, ?, ?, ?)
+		`INSERT INTO jobs (command, args, env_overrides, status, started_at)
+		 VALUES (?, ?, ?, ?, ?)
 		 RETURNING id`,
-		command, string(argsJSON), string(envJSON), status,
+		command, string(argsJSON), string(envJSON), status, startedAt,
 	).Scan(&jobID)
 	if err != nil {
 		return nil, fmt.Errorf("inserting job: %w", err)
@@ -146,19 +152,15 @@ func (r *Runner) Start(ctx context.Context, jobID int64) error {
 type Prepare func(ctx context.Context, logf func(string)) error
 
 // CreatePreparedJob creates a job that runs prepare and then the command. The
-// job is "running" from the start, so the job processor never starts it; it
-// still counts towards the concurrency limit. cleanup, if not nil, runs once the
-// job has ended, whether it succeeded or not.
+// job is inserted as "running", never queued, so the job processor cannot start
+// the command before prepare has finished; it still counts towards the
+// concurrency limit. cleanup, if not nil, runs once the job has ended, whether
+// it succeeded or not.
 func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []string, prepare Prepare, cleanup func()) (*Job, error) {
-	job, err := r.CreateJob(ctx, command, args, nil)
+	job, err := r.createJob(ctx, command, args, nil, StatusRunning)
 	if err != nil {
 		return nil, err
 	}
-	now := time.Now()
-	if err := r.updateStatus(ctx, job.ID, StatusRunning, &now, nil, nil); err != nil {
-		return nil, fmt.Errorf("updating status to running: %w", err)
-	}
-	job.Status = StatusRunning
 
 	go func() {
 		if cleanup != nil {
@@ -173,9 +175,8 @@ func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []s
 		defer r.setStop(job.ID, nil)
 		fail := func(msg string) {
 			_ = r.appendLog(bg, job.ID, "stderr", msg)
-			completedAt := time.Now()
 			exitCode := -1
-			_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+			r.finish(bg, job.ID, StatusFailed, nil, &exitCode)
 		}
 		logf := func(msg string) { _ = r.appendLog(bg, job.ID, "stdout", msg) }
 		if err := prepare(jobCtx, logf); err != nil {
@@ -244,9 +245,8 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 	// Start the command
 	if err := cmd.Start(); err != nil {
 		stop()
-		completedAt := time.Now()
 		exitCode := -1
-		_ = r.updateStatus(ctx, jobID, StatusFailed, &now, &completedAt, &exitCode)
+		r.finish(ctx, jobID, StatusFailed, &now, &exitCode)
 		return nil, fmt.Errorf("starting command: %w", err)
 	}
 	r.setStop(jobID, stop)
@@ -282,7 +282,6 @@ func (r *Runner) monitorCompletion(ctx context.Context, jobID int64, cmd *exec.C
 	err := cmd.Wait()
 	r.setStop(jobID, nil)
 
-	completedAt := time.Now()
 	var status JobStatus
 	var exitCode *int
 
@@ -303,7 +302,17 @@ func (r *Runner) monitorCompletion(ctx context.Context, jobID int64, cmd *exec.C
 		exitCode = &code
 	}
 
-	_ = r.updateStatus(ctx, jobID, status, nil, &completedAt, exitCode)
+	r.finish(ctx, jobID, status, nil, exitCode)
+}
+
+// finish stores a job's final status. A lost write leaves the job "running"
+// until the next boot, so the error is logged. A cancelled ctx means the job
+// was stopped on purpose and its status is already stored, so that is not.
+func (r *Runner) finish(ctx context.Context, jobID int64, status JobStatus, startedAt *time.Time, exitCode *int) {
+	completedAt := time.Now()
+	if err := r.updateStatus(ctx, jobID, status, startedAt, &completedAt, exitCode); err != nil && ctx.Err() == nil {
+		fmt.Printf("Error storing status %s for job #%d: %v\n", status, jobID, err)
+	}
 }
 
 // setStop records how to stop a running job, or forgets it when stop is nil.

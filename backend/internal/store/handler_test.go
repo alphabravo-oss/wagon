@@ -29,12 +29,16 @@ func setupTestHandler(t *testing.T) (*Handler, *sql.DB) {
 	dataDir := t.TempDir()
 	name := filepath.Join(dataDir, "test.db")
 
-	// The test polls jobs while background goroutines write them; without a
-	// busy timeout those writes can fail with SQLITE_BUSY and be dropped.
+	// The test polls jobs while background goroutines write them. With more
+	// than one connection a write can fail with SQLITE_BUSY, and the runner's
+	// final status write was then lost (the job stayed "running"). Mirror
+	// production Open: one connection, so writes queue instead of failing.
 	db, err := sql.Open("sqlite", "file:"+name+"?_pragma=busy_timeout(5000)")
 	if err != nil {
 		t.Fatalf("opening database: %v", err)
 	}
+	db.SetMaxOpenConns(1)
+	db.SetMaxIdleConns(1)
 	t.Cleanup(func() {
 		if err := db.Close(); err != nil {
 			t.Errorf("close db: %v", err)
