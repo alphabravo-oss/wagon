@@ -7,7 +7,7 @@ RUN npm ci
 COPY web/ ./
 RUN npm run build
 
-FROM golang:1.27.2-alpine AS backend-builder
+FROM golang:1.27.3-alpine AS backend-builder
 
 WORKDIR /backend
 COPY backend/go.mod backend/go.sum* ./
