@@ -5,6 +5,7 @@ import (
 	"embed"
 	"fmt"
 	"io/fs"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -136,8 +137,43 @@ func applyMigrations(db *sql.DB) error {
 		if err := tx.Commit(); err != nil {
 			return fmt.Errorf("committing migration %d: %w", version, err)
 		}
+
+		if after := afterMigration[version]; after != nil {
+			if err := after(db); err != nil {
+				// Not fatal: VACUUM needs free disk, and a full disk must not
+				// stop Wagon from starting. Un-record the migration so the next
+				// start runs it again; its SQL is idempotent.
+				log.Printf("Warning: finishing migration %d: %v (will retry on next start)", version, err)
+				_, _ = db.Exec("DELETE FROM schema_migrations WHERE version = ?", version)
+			}
+		}
 	}
 
+	return nil
+}
+
+// afterMigration holds steps that cannot run inside a migration's
+// transaction. Each runs once its migration has committed.
+var afterMigration = map[int]func(*sql.DB) error{
+	9: scrubFreedPages,
+}
+
+// scrubFreedPages removes freed bytes (the old registry passwords migration 9
+// nulls) from the database files. VACUUM rewrites every page, then a TRUNCATE
+// checkpoint copies the WAL into the main file and empties the WAL. VACUUM
+// first: in WAL mode it writes its pages to the WAL, so only the checkpoint
+// after it overwrites the old pages in the main file.
+func scrubFreedPages(db *sql.DB) error {
+	if _, err := db.Exec("VACUUM"); err != nil {
+		return fmt.Errorf("vacuum: %w", err)
+	}
+	var busy, walFrames, checkpointed int
+	if err := db.QueryRow("PRAGMA wal_checkpoint(TRUNCATE)").Scan(&busy, &walFrames, &checkpointed); err != nil {
+		return fmt.Errorf("wal checkpoint: %w", err)
+	}
+	if busy != 0 {
+		return fmt.Errorf("wal checkpoint: database busy")
+	}
 	return nil
 }
 

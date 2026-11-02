@@ -246,7 +246,9 @@ When you run `hauler login <registry>` (via CLI or UI), credentials are stored f
 1. User navigates to "Registry Login" page
 2. Enters registry URL, username, and password
 3. Backend creates an async job running `hauler login`
-4. Credentials are passed via environment variables (not CLI args) for security
+4. Wagon runs `hauler login <registry> -u <user> --password-stdin`: the username
+   is an argument, and the password goes to hauler on stdin only, never in the
+   process arguments, the environment, the job row or the job log
 5. Hauler writes credentials to `/data/.docker/config.json`
 6. Credentials persist for future operations (sync, copy, etc.)
 
@@ -268,8 +270,13 @@ docker exec wagon hauler logout registry.example.com
 
 ### Credential Security
 
-- **In UI**: Passwords are never stored in the SQLite database
-- **In transit**: Credentials passed via environment variables to child process
+- **In UI**: Passwords are not stored in the SQLite database. Wagon versions
+  before the card 61 fix stored them in the job row's `env_overrides`; on its
+  first start, this version nulls those values and rewrites `app.db` and
+  `app.db-wal` (`VACUUM` and a WAL checkpoint) so the old bytes are gone.
+  Backups taken before the upgrade still hold them, so change any registry
+  password entered on an older version
+- **In transit**: The password goes to `hauler login` on stdin; the username is a command argument
 - **At rest**: Stored in Docker config.json format, **base64-encoded, not encrypted**. Anyone who can read the `/data` volume can recover the passwords, so restrict access to the volume and its backups
 - **Logs**: Job logs redact sensitive information
 

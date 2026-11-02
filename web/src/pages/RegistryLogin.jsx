@@ -180,8 +180,10 @@ function RegistryLogin() {
           <div className="card-title">About Credential Storage</div>
           <div style={{ color: 'var(--text-secondary)', fontSize: '0.9rem', lineHeight: '1.6' }}>
             <p>
-              <strong>Note:</strong> Your password is <strong>not stored</strong> in the Wagon database.
-              Credentials are managed by hauler and stored in the Docker configuration file.
+              <strong>Note:</strong> Your password goes to hauler on stdin and is <strong>not stored</strong> in
+              the Wagon database. Credentials are managed by hauler and stored in the Docker configuration file.
+              Older Wagon versions kept the password in job history; this version removes those copies when it
+              starts, but backups taken before the upgrade still hold them.
             </p>
             <p style={{ marginTop: '0.75rem' }}>
               <strong>Storage Location:</strong> <code>{registryInfo.displayPath || registryInfo.dockerAuthPath}</code>

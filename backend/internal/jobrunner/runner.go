@@ -6,10 +6,12 @@ import (
 	"context"
 	"database/sql"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"regexp"
 	"sync"
 	"syscall"
@@ -83,23 +85,37 @@ func (r *Runner) CreateJob(ctx context.Context, command string, args []string, e
 // --password-stdin. stdin stays in memory: it is never stored with the job,
 // put in argv or env, or logged. The job is created as running, so the job
 // processor (which has no stdin to give) never starts it. The command runs
-// under a background context, so it outlives the request that created it.
+// under a background context, so it outlives the request that created it, and
+// is killed after stdinJobTimeout. stdin is zeroed once the command has exited.
 // If the command cannot start, the job is marked failed with the error in its
-// log, like any other job.
+// log and the error is returned.
 func (r *Runner) CreateStdinJob(ctx context.Context, command string, args []string, stdin []byte) (*Job, error) {
 	job, err := r.createJob(ctx, command, args, nil, StatusRunning)
 	if err != nil {
+		clear(stdin)
 		return nil, err
 	}
 	bg := context.Background()
-	if _, err := r.start(bg, job.ID, stdin); err != nil {
+	if _, err := r.start(bg, job.ID, stdin, stdinJobTimeout); err != nil {
+		clear(stdin)
 		_ = r.appendLog(bg, job.ID, "stderr", err.Error())
 		completedAt := time.Now()
 		exitCode := -1
 		_ = r.updateStatus(bg, job.ID, StatusFailed, nil, &completedAt, &exitCode)
+		return nil, fmt.Errorf("starting job #%d: %w", job.ID, err)
 	}
 	return job, nil
 }
+
+// stdinJobTimeout bounds a CreateStdinJob command (registry login and logout).
+// hauler only writes the local Docker config for those, so a command still
+// running after this has hung. stdinJobWaitDelay then bounds how long os/exec
+// keeps copying stdin to a killed command whose child still holds it open.
+// Tests shorten them.
+var (
+	stdinJobTimeout   = 2 * time.Minute
+	stdinJobWaitDelay = 5 * time.Second
+)
 
 func (r *Runner) createJob(ctx context.Context, command string, args []string, envOverrides map[string]string, status JobStatus) (*Job, error) {
 	r.mu.Lock()
@@ -136,7 +152,7 @@ func (r *Runner) createJob(ctx context.Context, command string, args []string, e
 
 // Start executes a job and updates its state
 func (r *Runner) Start(ctx context.Context, jobID int64) error {
-	_, err := r.start(ctx, jobID, nil)
+	_, err := r.start(ctx, jobID, nil, 0)
 	return err
 }
 
@@ -182,7 +198,7 @@ func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []s
 			fail(err.Error())
 			return
 		}
-		done, err := r.start(jobCtx, job.ID, nil)
+		done, err := r.start(jobCtx, job.ID, nil, 0)
 		if err != nil {
 			fail(err.Error())
 			return
@@ -192,14 +208,21 @@ func (r *Runner) CreatePreparedJob(ctx context.Context, command string, args []s
 	return job, nil
 }
 
-// start runs a job's command. A nil stdin gives the command an empty stdin.
-// The returned channel is closed once the command has exited and its final
-// status is stored.
-func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan struct{}, error) {
+// start runs a job's command. A nil stdin gives the command an empty stdin;
+// stdin is zeroed once the command has exited. A non-zero timeout kills the
+// command after that long. The returned channel is closed once the command has
+// exited and its final status is stored.
+func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte, timeout time.Duration) (<-chan struct{}, error) {
 	// Get job details
 	job, err := r.GetJob(ctx, jobID)
 	if err != nil {
 		return nil, fmt.Errorf("getting job: %w", err)
+	}
+
+	// hauler login reads an empty stdin as an empty password and saves it over
+	// the stored credential, so a login never runs without one.
+	if filepath.Base(job.Command) == "hauler" && len(job.Args) > 0 && job.Args[0] == "login" && len(stdin) == 0 {
+		return nil, errors.New("hauler login needs the password on stdin")
 	}
 
 	// Update status to running
@@ -220,8 +243,17 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 	}
 
 	// Create command. Its own ctx lets cleanup kill it (stopJob).
-	cmdCtx, stop := context.WithCancel(ctx)
+	var cmdCtx context.Context
+	var stop context.CancelFunc
+	if timeout > 0 {
+		cmdCtx, stop = context.WithTimeout(ctx, timeout)
+	} else {
+		cmdCtx, stop = context.WithCancel(ctx)
+	}
 	cmd := exec.CommandContext(cmdCtx, job.Command, job.Args...)
+	if timeout > 0 {
+		cmd.WaitDelay = stdinJobWaitDelay
+	}
 	cmd.Env = env
 	cmd.Dir = r.workDir
 	if stdin != nil {
@@ -272,6 +304,10 @@ func (r *Runner) start(ctx context.Context, jobID int64, stdin []byte) (<-chan s
 		defer stop()
 		streams.Wait()
 		r.monitorCompletion(ctx, jobID, cmd)
+		clear(stdin) // Wait has returned, so os/exec no longer reads it
+		if errors.Is(cmdCtx.Err(), context.DeadlineExceeded) {
+			_ = r.appendLog(ctx, jobID, "stderr", fmt.Sprintf("killed after %s timeout", timeout))
+		}
 	}()
 
 	return done, nil

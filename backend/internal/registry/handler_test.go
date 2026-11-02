@@ -32,10 +32,19 @@ func newTestHandler(t *testing.T, cfg *config.Config) (*Handler, *jobrunner.Runn
 	return NewHandler(runner, cfg), runner
 }
 
+// fakeHauler puts a hauler on PATH that reads stdin and exits 0.
+func fakeHauler(t *testing.T) {
+	t.Helper()
+	bin := t.TempDir()
+	if err := os.WriteFile(filepath.Join(bin, "hauler"), []byte("#!/bin/sh\ncat >/dev/null\n"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+}
+
 // waitForJobSettled polls until the job leaves the queued/running state so the
-// background Start goroutine (which execs the missing hauler binary and fails)
-// finishes writing before the test's DB is closed. This keeps the async work
-// from racing test cleanup; it does not assert job success.
+// background command finishes writing before the test's DB is closed. This
+// keeps the async work from racing test cleanup; it does not assert job success.
 func waitForJobSettled(t *testing.T, runner *jobrunner.Runner, jobID int64) {
 	t.Helper()
 	deadline := time.Now().Add(3 * time.Second)
@@ -50,6 +59,7 @@ func waitForJobSettled(t *testing.T, runner *jobrunner.Runner, jobID int64) {
 }
 
 func TestLoginCreatesJob(t *testing.T) {
+	fakeHauler(t)
 	h, runner := newTestHandler(t, &config.Config{DockerAuthPath: "/data/.docker/config.json"})
 
 	body, _ := json.Marshal(LoginRequest{
@@ -160,7 +170,33 @@ func TestLoginMissingRegistryIsBadRequest(t *testing.T) {
 	}
 }
 
+// If hauler cannot start, nothing was saved, so login must not answer 202
+// "saved": it answers 500 and the job row ends failed.
+func TestLoginHaulerStartFailureIs500(t *testing.T) {
+	t.Setenv("PATH", t.TempDir()) // no hauler
+	h, runner := newTestHandler(t, &config.Config{})
+	const password = "card73-not-a-real-password"
+	body := `{"registry":"registry.example.com","username":"alice","password":"` + password + `"}`
+	rec := httptest.NewRecorder()
+	h.Login(rec, httptest.NewRequest(http.MethodPost, "/api/registry/login", strings.NewReader(body)))
+
+	if rec.Code != http.StatusInternalServerError {
+		t.Fatalf("status %d body %q, want 500", rec.Code, rec.Body.String())
+	}
+	if strings.Contains(rec.Body.String(), "saved") || strings.Contains(rec.Body.String(), password) {
+		t.Errorf("body %q must not say saved or echo the password", rec.Body.String())
+	}
+	jobs, err := runner.ListJobs(context.Background(), nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(jobs) != 1 || jobs[0].Status != jobrunner.StatusFailed {
+		t.Fatalf("jobs %+v, want one failed job", jobs)
+	}
+}
+
 func TestLogoutEnqueuesJob(t *testing.T) {
+	fakeHauler(t)
 	h, runner := newTestHandler(t, &config.Config{})
 
 	body, _ := json.Marshal(LogoutRequest{Registry: "registry.example.com"})
