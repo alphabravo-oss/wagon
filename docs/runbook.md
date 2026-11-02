@@ -134,8 +134,8 @@ Registry credentials are stored in Docker config format:
 
 ```bash
 # Via UI: Use the "Registry Login" page
-# Via CLI:
-hauler login registry.example.com --username user --password pass
+# Via CLI: the password is read from stdin, so it stays out of the process arguments
+printf '%s' "$REGISTRY_PASSWORD" | docker exec -i wagon hauler login registry.example.com -u user --password-stdin
 ```
 
 Credentials are stored at `/data/.docker/config.json` inside the container. They are **base64-encoded, not encrypted**: anyone who can read the volume can read them.

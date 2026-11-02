@@ -76,12 +76,13 @@ func (h *Handler) Login(w http.ResponseWriter, r *http.Request) {
 
 	// The password goes to hauler on stdin only, never in argv (visible in
 	// /proc/<pid>/cmdline), env or the job row. hauler 1.3.2 reads no
-	// username/password env vars.
+	// username/password env vars. An error includes hauler failing to start,
+	// so nothing was saved.
 	args := []string{"login", req.Registry, "-u", req.Username, "--password-stdin"}
 	job, err := h.jobRunner.CreateStdinJob(r.Context(), "hauler", args, []byte(req.Password))
 	if err != nil {
-		log.Printf("Error creating login job: %v", err)
-		http.Error(w, "Failed to create login job", http.StatusInternalServerError)
+		log.Printf("Error starting login job: %v", err)
+		http.Error(w, "Failed to start login job", http.StatusInternalServerError)
 		return
 	}
 

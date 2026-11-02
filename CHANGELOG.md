@@ -203,6 +203,17 @@ All notable changes to Wagon will be documented in this file.
   env vars that hauler 1.3.2 does not read, and stored the password in the job
   row. hauler saves credentials without checking them, so the UI and API now
   say the login was saved, not verified; a wrong password fails at pull or push.
+- Registry passwords stored by older versions are removed from the database
+  (card 73). Migration 9 nulls `env_overrides` on job rows that hold
+  `HAULER_REGISTRY_PASSWORD`, with `secure_delete` on, then runs `VACUUM` and a
+  `wal_checkpoint(TRUNCATE)`, so the old bytes are gone from `app.db` and
+  `app.db-wal`. Backups taken before the upgrade still hold them: change any
+  registry password entered on an older version.
+- Registry login answers HTTP 500 when hauler cannot start, instead of 202
+  "saved"; logout does the same. Login and logout commands are killed after 2
+  minutes instead of staying "running" until a restart, a login never runs
+  without the password on stdin (hauler would save an empty password over the
+  stored one), and the runner zeroes its copy of the password once hauler exits.
 - Starting a registry serve on an empty haul no longer fails with HTTP 500
   (`stat …/index.json: no such file or directory`); it starts with an empty
   catalog. New hauls get an empty `index.json`, and existing empty hauls get one

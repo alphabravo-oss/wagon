@@ -741,17 +741,107 @@ func TestCreateStdinJobSecretNotInArgvEnvOrLogs(t *testing.T) {
 	}
 }
 
+// A command that cannot start is an error for the caller (so registry login
+// does not answer "saved"), and the job row still ends failed with the reason.
 func TestCreateStdinJobStartFailureFailsJob(t *testing.T) {
-	runner := New(setupTestDB(t), t.TempDir())
-	job, err := runner.CreateStdinJob(context.Background(), "/nonexistent/wagon-test-cmd", nil, []byte("x"))
-	if err != nil {
+	db := setupTestDB(t)
+	runner := New(db, t.TempDir())
+	stdin := []byte("x")
+	job, err := runner.CreateStdinJob(context.Background(), "/nonexistent/wagon-test-cmd", nil, stdin)
+	if err == nil || job != nil {
+		t.Fatalf("got job %v, err %v; want nil job and an error", job, err)
+	}
+	var id int64
+	if err := db.QueryRow(`SELECT id FROM jobs ORDER BY id DESC LIMIT 1`).Scan(&id); err != nil {
 		t.Fatal(err)
 	}
-	end := waitForEnd(t, runner, job.ID)
+	end := waitForEnd(t, runner, id)
 	if end.Status != StatusFailed {
 		t.Errorf("status %q, want %q", end.Status, StatusFailed)
 	}
-	if out := logText(t, runner, job.ID); !strings.Contains(out, "starting command") {
+	if out := logText(t, runner, id); !strings.Contains(out, "starting command") {
 		t.Errorf("expected start error in log, got %q", out)
+	}
+	if stdin[0] != 0 {
+		t.Error("stdin not zeroed after a failed start")
+	}
+}
+
+// shortStdinTimeouts makes CreateStdinJob kill its command quickly.
+func shortStdinTimeouts(t *testing.T) {
+	t.Helper()
+	timeout, delay := stdinJobTimeout, stdinJobWaitDelay
+	stdinJobTimeout, stdinJobWaitDelay = 300*time.Millisecond, 300*time.Millisecond
+	t.Cleanup(func() { stdinJobTimeout, stdinJobWaitDelay = timeout, delay })
+}
+
+func TestCreateStdinJobTimesOut(t *testing.T) {
+	shortStdinTimeouts(t)
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.CreateStdinJob(context.Background(), "/bin/sh", []string{"-c", "exec sleep 30"}, []byte("x"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if end := waitForEnd(t, runner, job.ID); end.Status != StatusFailed {
+		t.Errorf("status %q, want %q", end.Status, StatusFailed)
+	}
+	deadline := time.Now().Add(2 * time.Second)
+	for !strings.Contains(logText(t, runner, job.ID), "killed after") {
+		if time.Now().After(deadline) {
+			t.Fatalf("no timeout line in log: %q", logText(t, runner, job.ID))
+		}
+		time.Sleep(10 * time.Millisecond)
+	}
+}
+
+// A killed command whose child still holds stdin open, with unread stdin left,
+// must not keep the job running: WaitDelay stops os/exec's stdin copy.
+func TestCreateStdinJobWaitDelayStopsStdinCopy(t *testing.T) {
+	shortStdinTimeouts(t)
+	runner := New(setupTestDB(t), t.TempDir())
+	script := `exec 3<&0; sleep 4 <&3 >/dev/null 2>&1 & exec sleep 30`
+	job, err := runner.CreateStdinJob(context.Background(), "/bin/sh", []string{"-c", script}, make([]byte, 1<<20))
+	if err != nil {
+		t.Fatal(err)
+	}
+	start := time.Now()
+	if end := waitForEnd(t, runner, job.ID); end.Status != StatusFailed {
+		t.Errorf("status %q, want %q", end.Status, StatusFailed)
+	}
+	if took := time.Since(start); took > 3*time.Second {
+		t.Errorf("job ended after %s; the held stdin kept it running", took)
+	}
+}
+
+// hauler login with an empty stdin would save an empty password over the
+// stored one, so no start path may run it without stdin.
+func TestStartRefusesHaulerLoginWithoutStdin(t *testing.T) {
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.CreateJob(context.Background(), "hauler", []string{"login", "registry.example.com", "-u", "alice", "--password-stdin"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := runner.Start(context.Background(), job.ID); err == nil || !strings.Contains(err.Error(), "needs the password on stdin") {
+		t.Fatalf("Start error %v, want the stdin refusal", err)
+	}
+	if _, err := runner.CreateStdinJob(context.Background(), "hauler", []string{"login", "registry.example.com"}, nil); err == nil {
+		t.Fatal("CreateStdinJob ran hauler login with nil stdin")
+	}
+}
+
+func TestStartZeroesStdin(t *testing.T) {
+	runner := New(setupTestDB(t), t.TempDir())
+	job, err := runner.createJob(context.Background(), "/bin/sh", []string{"-c", "cat >/dev/null"}, nil, StatusRunning)
+	if err != nil {
+		t.Fatal(err)
+	}
+	stdin := []byte("stdin-secret")
+	done, err := runner.start(context.Background(), job.ID, stdin, 0)
+	if err != nil {
+		t.Fatal(err)
+	}
+	<-done
+	if string(stdin) != string(make([]byte, len(stdin))) {
+		t.Errorf("stdin %q not zeroed after the command exited", stdin)
 	}
 }
